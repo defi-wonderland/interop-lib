@@ -1,55 +1,356 @@
-# interop-lib
+# Interop Promise Library
 
-Subset of [interoperability](https://specs.optimism.io/interop/overview.html) related contract interfaces / libraries from the [Optimism monorepo](https://github.com/ethereum-optimism/optimism/tree/develop/packages/contracts-bedrock)
+A Solidity implementation of JavaScript-style promises for cross-chain and local asynchronous operations.
 
-## Installation
-
-To install with [**Foundry**](https://github.com/foundry-rs/foundry):
-
-```bash
-forge install ethereum-optimism/interop-lib
-```
-
-### Remappings
-
-#### foundry.toml
-
-```toml
-remappings = [
-  "@interop-lib/=lib/interop-lib/src/"
-]
-```
-
-#### remappings.txt (VSCode)
-
-```txt
-@interop-lib/=lib/interop-lib/src/
-```
-
-### Importing
-
-```solidity
-import {IERC7802} from "@interop-lib/interfaces/IL2ToL2CrossDomainMessenger.sol";
-import {PredeployAddresses} from "@interop-lib/libraries/PredeployAddresses.sol";
-```
+### **Just 426 lines of code** 
+Promise: 130, Callback: 150, PromiseAll: 99, SetTimeout: 47
 
 ## Overview
 
-### Interfaces
+This library provides a comprehensive promise-based system for handling asynchronous operations in smart contracts, with support for both local and cross-chain execution. The system enables JavaScript-familiar promise semantics including creation, resolution, rejection, chaining, and aggregation across multiple blockchain networks.
 
-- [ICrossL2Inbox.sol](src/interfaces/ICrossL2Inbox.sol)
-- [IERC7802.sol](src/interfaces/IERC7802.sol)
-- [IETHLiquidity.sol](src/interfaces/IETHLiquidity.sol)
-- [IL2ToL2CrossDomainMessenger.sol](src/interfaces/IL2ToL2CrossDomainMessenger.sol)
-- [ISemver.sol](src/interfaces/ISemver.sol)
-- [ISuperchainTokenBridge.sol](src/interfaces/ISuperchainTokenBridge.sol)
-- [ISuperchainETHBridge.sol](src/interfaces/ISuperchainETHBridge.sol)
+## Components
 
-### Libraries
+### Core Contracts
 
-- [CrossDomainMessageLib.sol](src/libraries/CrossDomainMessageLib.sol)
-- [PredeployAddresses.sol](src/libraries/PredeployAddresses.sol)
+- **Promise.sol** - Base promise contract managing promise lifecycle, state, and cross-chain sharing
+- **SetTimeout.sol** - Time-based promises that resolve after specified timestamps  
+- **Callback.sol** - Promise chaining with `.then()` and `.catchError()` callbacks, including cross-chain callback registration
+- **PromiseAll.sol** - Promise aggregation that resolves when all constituent promises succeed
 
-### Contracts
+### Cross-Chain Capabilities
 
-- [SuperchainERC20.sol](src/SuperchainERC20.sol)
+All core contracts support cross-chain operations through integration with L2ToL2CrossDomainMessenger:
+
+- **Promise sharing** - Resolved promises can be shared across chains with full state preservation
+- **Resolution transfer** - Promise resolution rights can be transferred to other chains
+- **Cross-chain callbacks** - Callbacks can be registered to execute on different chains
+- **Remote promise callbacks** - Callbacks can be created for promises that exist on other chains
+- **Global promise IDs** - Hash-based unique identifiers ensure promise uniqueness across chains
+
+### Supporting Infrastructure
+
+- **IResolvable.sol** - Interface for contracts that can resolve promises
+- **PromiseHarness.sol** - Test automation for automatically resolving pending promises
+- **Relayer.sol** - Cross-chain message relay simulation for testing
+
+## Usage
+
+### Basic Promise Operations
+
+```solidity
+// Create a promise
+uint256 promiseId = promiseContract.create();
+
+// Resolve with data
+promiseContract.resolve(promiseId, abi.encode("result"));
+
+// Or reject with error
+promiseContract.reject(promiseId, abi.encode("error"));
+
+// Check promise status
+Promise.PromiseStatus status = promiseContract.status(promiseId);
+```
+
+### Cross-Chain Promise Sharing
+
+```solidity
+// Share resolved promise to another chain
+promiseContract.shareResolvedPromise(destinationChainId, promiseId);
+
+// Transfer resolution rights to another chain
+promiseContract.transferResolve(promiseId, destinationChainId, newResolverAddress);
+```
+
+### Timeout Promises
+
+```solidity
+// Create a promise that resolves after 100 seconds
+uint256 timeoutId = setTimeoutContract.create(100);
+
+// Later, anyone can resolve it once the time has passed
+if (setTimeoutContract.canResolve(timeoutId)) {
+    setTimeoutContract.resolve(timeoutId);
+}
+```
+
+### Promise Chaining
+
+```solidity
+// Local callback registration
+uint256 thenId = callbackContract.then(
+    parentPromiseId, 
+    targetContract, 
+    targetContract.handleSuccess.selector
+);
+
+// Cross-chain callback registration
+uint256 crossChainThenId = callbackContract.thenOn(
+    destinationChainId,
+    parentPromiseId,
+    targetContract,
+    targetContract.handleSuccess.selector
+);
+
+// Error handling callbacks
+uint256 catchId = callbackContract.catchError(
+    parentPromiseId,
+    targetContract, 
+    targetContract.handleError.selector
+);
+```
+
+### Remote Promise Callbacks
+
+```solidity
+// Create callbacks for promises that exist on other chains
+uint256 remoteCallbackId = callbackContract.then(
+    remotePromiseId, // Promise ID from another chain
+    targetContract,
+    targetContract.handleSuccess.selector
+);
+// Callback will become resolvable when remote promise is shared to this chain
+```
+
+### Promise Aggregation
+
+```solidity
+// Aggregate promises from multiple chains
+uint256[] memory promises = new uint256[](3);
+promises[0] = localPromise;
+promises[1] = chainAPromise;  // From Chain A
+promises[2] = chainBPromise;  // From Chain B
+
+uint256 promiseAllId = promiseAllContract.create(promises);
+// Resolves when all promises resolve, rejects on first failure
+```
+
+## E2E Test Walkthroughs
+
+### Periodic Fee Collection and Burning (Cron Job Pattern)
+
+The `test_PeriodicFeeCollectionAndBurning` test demonstrates a complete cross-chain automated fee collection and burning system that operates like a truly automatic cron job - once started, it runs perpetually without any manual intervention:
+
+#### Architecture Overview
+- **CronScheduler** contract orchestrates the recurring workflow
+- **SetTimeout** creates periodic triggers (e.g., every hour)
+- **Cross-chain callbacks** collect fees from multiple chains
+- **PromiseAll** aggregates all fee collection results
+- **Burn callback** executes when all fees are collected
+- **Automatic scheduling** creates the next cycle timeout
+
+#### Flow Summary
+1. **Initialize cycle**: `startPeriodicFeeCollection()` sets up recurring 1-hour intervals with automatic execution
+2. **Automatic triggering**: After 1 hour passes, timeout callback automatically calls `executeCycle()`
+3. **Fee collection setup**: Creates callbacks to collect fees from Chain A and Chain B
+4. **Aggregation setup**: Uses PromiseAll to wait for both fee collections
+5. **Burn setup**: Registers callback to burn fees when aggregation completes
+6. **Schedule next cycle**: Automatically creates timeout and callback for next hour
+7. **Resolution cascade**: 
+   - Timeout resolves → Execution callback triggers → `executeCycle()` runs automatically
+   - Fee collection callbacks execute → PromiseAll resolves  
+   - PromiseAll resolves → Burn callback executes
+   - System perpetually schedules and executes next cycle
+
+#### 1. Initial Setup
+
+```solidity
+// Simulate accumulated fees on both chains
+feeCollectorA.simulateAccumulatedFees(1000 ether);
+feeCollectorB.simulateAccumulatedFees(500 ether);
+
+// Start the periodic cycle
+uint256 cycleId = cronScheduler.startPeriodicFeeCollection(
+    3600, // Run every hour (interval in seconds)
+    address(feeCollectorA),  // Chain A fee collector
+    address(feeCollectorB),  // Chain B fee collector  
+    address(feeBurner)       // Fee burner
+);
+```
+
+#### 2. CronScheduler.executeCycle() - The Heart of Automation
+
+```solidity
+function executeCycle(uint256 cycleId) external {
+    // Create cross-chain fee collection callbacks
+    uint256 chainAFeePromise = callbackContract.then(
+        nextTimeoutIds[cycleId],
+        cycle.chainAFeeCollector,
+        FeeCollector.collectFees.selector
+    );
+    
+    uint256 chainBFeePromise = callbackContract.thenOn(
+        cycle.chainBId,
+        nextTimeoutIds[cycleId],
+        cycle.chainBFeeCollector,
+        FeeCollector.collectFees.selector
+    );
+    
+    // Create PromiseAll to wait for both fee collections
+    uint256[] memory feePromises = new uint256[](2);
+    feePromises[0] = chainAFeePromise;
+    feePromises[1] = chainBFeePromise;
+    uint256 promiseAllId = promiseAllContract.create(feePromises);
+    
+    // Create burn callback that executes when both fees are collected
+    uint256 burnCallbackId = callbackContract.then(
+        promiseAllId,
+        cycle.feeBurner,
+        FeeBurner.burnFees.selector
+    );
+    
+            // **CRON MAGIC**: Schedule next execution automatically
+        uint256 nextTimeoutId = setTimeoutContract.create(cycle.interval);
+        
+        // **AUTOMATIC TRIGGERING**: Create callback to automatically execute next cycle
+        uint256 nextExecutionCallbackId = callbackContract.then(
+            nextTimeoutId,
+            address(this),
+            CronScheduler.executeCycleCallback.selector
+        );
+        executionCallbackIds[cycleId] = nextExecutionCallbackId;
+        
+        nextTimeoutIds[cycleId] = nextTimeoutId;
+}
+
+/// @notice Callback wrapper for automatic cycle execution  
+/// @dev This function is called automatically when timeout resolves
+function executeCycleCallback(bytes memory /* data */) external returns (string memory) {
+    // Find which cycle needs to be executed by checking which timeout is resolved
+    for (uint256 cycleId = 1; cycleId < nextCycleId; cycleId++) {
+        if (!cycles[cycleId].active) continue;
+        
+        uint256 timeoutId = nextTimeoutIds[cycleId];
+        if (timeoutId > 0 && 
+            promiseContract.status(timeoutId) == Promise.PromiseStatus.Resolved &&
+            (cycles[cycleId].lastExecution == 0 || 
+             block.timestamp >= cycles[cycleId].lastExecution + cycles[cycleId].interval)) {
+            // This timeout resolved and cycle is ready
+            this.executeCycle(cycleId);
+            return "Cycle executed automatically";
+        }
+    }
+    return "No cycles ready for execution";
+}
+```
+
+#### 3. Execution Flow
+
+```solidity
+// Time passes and cycle triggers automatically
+vm.warp(block.timestamp + 3700);
+
+// Resolve the trigger timeout (this will automatically execute the cycle)
+uint256 triggerTimeoutId = cronScheduler.getNextTimeoutId(cycleId);
+setTimeoutA.resolve(triggerTimeoutId);
+
+// Resolve the automatic cycle execution callback
+uint256 executionCallbackId = cronScheduler.getExecutionCallbackId(cycleId);
+callbackA.resolve(executionCallbackId);
+
+// Share timeout to Chain B so cross-chain callbacks can execute
+promiseA.shareResolvedPromise(chainBId, triggerTimeoutId);
+relayAllMessages();
+```
+
+#### 4. Resolution Cascade
+
+```solidity
+// Fee collection callbacks become resolvable
+uint256 chainAFeePromise = cronScheduler.getLastChainAFeePromise(cycleId);
+uint256 chainBFeePromise = cronScheduler.getLastChainBFeePromise(cycleId);
+
+// Execute fee collections
+callbackA.resolve(chainAFeePromise);  // Collects Chain A fees
+callbackB.resolve(chainBFeePromise);  // Collects Chain B fees
+
+// Share Chain B results back to Chain A for aggregation
+promiseB.shareResolvedPromise(chainAId, chainBFeePromise);
+relayAllMessages();
+
+// PromiseAll becomes resolvable when both fee collections complete
+uint256 promiseAllId = cronScheduler.getLastPromiseAllId(cycleId);
+promiseAllA.resolve(promiseAllId);  // Aggregates [1000 ETH, 500 ETH]
+
+// Burn callback becomes resolvable when PromiseAll completes
+uint256 burnCallbackId = cronScheduler.getLastBurnCallbackId(cycleId);
+callbackA.resolve(burnCallbackId);  // Burns total 1500 ETH
+```
+
+#### 5. Verification
+
+```solidity
+// Verify the complete workflow succeeded
+assertTrue(feeCollectorA.wasCollected(), "Chain A fees collected");
+assertTrue(feeCollectorB.wasCollected(), "Chain B fees collected");
+assertTrue(feeBurner.wasBurned(), "Fees burned");
+assertEq(feeBurner.totalBurned(), 1500 ether, "Total burned: 1500 ETH");
+
+// Verify next cycle is automatically scheduled
+uint256 nextTimeoutId = cronScheduler.getNextTimeoutId(cycleId);
+assertTrue(nextTimeoutId > 0, "Next timeout scheduled");
+```
+
+#### Key Architecture Features
+
+- **Fully Automatic Execution**: Each cycle creates a callback that automatically triggers the next execution when the timeout resolves
+- **Self-Perpetuating**: Once started, cycles continue indefinitely without manual intervention
+- **Cross-Chain Coordination**: Seamlessly orchestrates operations across multiple chains
+- **Fail-Safe Aggregation**: Uses PromiseAll to ensure all collections complete before burning
+- **State Management**: Tracks cycle state, execution count, and promise relationships
+- **Error Handling**: Failed fee collections cause PromiseAll to reject, preventing burning
+
+This pattern enables fully automated recurring operations across multiple chains with sophisticated error handling and state coordination.
+
+### Remote Promise Orchestration
+
+The `test_RemotePromiseTimeoutOrchestration` test demonstrates advanced cross-chain coordination where one chain controls timing while another orchestrates complex business logic:
+
+#### Scenario
+- **Chain B** controls timing by creating timeout promises
+- **Chain A** orchestrates fee collection workflows triggered by Chain B's timeouts
+- Demonstrates callback creation for promises that don't exist locally
+
+#### Key Capabilities
+- **Proactive orchestration**: Chain A sets up complete workflows before triggers occur
+- **Remote promise callbacks**: Callbacks created for promises existing only on other chains  
+- **Separation of concerns**: Timing control and business logic can be on different chains
+- **Cross-chain coordination**: Complex multi-chain workflows triggered by remote events
+
+This pattern enables sophisticated architectures where specialized chains handle what they do best - one chain manages scheduling, another handles complex orchestration logic.
+
+## Promise States
+
+- **Pending** - Initial state, not yet resolved or rejected
+- **Resolved** - Completed successfully with return data  
+- **Rejected** - Failed with error data
+
+## Global Promise IDs
+
+The system uses hash-based global promise IDs generated from `keccak256(abi.encode(chainId, localPromiseId))` to ensure uniqueness across chains while maintaining deterministic identification.
+
+## Testing
+
+The library includes comprehensive test coverage:
+
+- **Local tests** covering core promise functionality
+- **Cross-chain tests** demonstrating multi-chain coordination
+- **End-to-end tests** showing complete realistic workflows
+- Error handling, edge cases, and complex orchestration scenarios
+
+Run tests with:
+```bash
+forge test                    # All tests
+forge test --match-path "test/XChain*.sol"  # Cross-chain tests only
+```
+
+## Architecture
+
+The system centers around a Promise contract managing promise state and cross-chain operations. Specialized contracts handle different promise types while maintaining composability. The architecture supports:
+
+- **Decentralized promise management** through ID-based referencing
+- **Cross-chain state synchronization** via message passing
+- **Extensible promise types** through the IResolvable interface
+- **Automated resolution** via PromiseHarness for complex testing scenarios
+
+All contracts are designed for CREATE2 deployment to ensure consistent addresses across chains, enabling seamless cross-chain coordination.
