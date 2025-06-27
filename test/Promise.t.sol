@@ -1,134 +1,253 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.25;
+pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
-import {Vm} from "forge-std/Vm.sol";
-import {IERC20} from "@openzeppelin-contracts/interfaces/IERC20.sol";
+import {Promise} from "../src/Promise.sol";
 
-import {Identifier} from "../src/interfaces/IIdentifier.sol";
-import {SuperchainERC20} from "../src/SuperchainERC20.sol";
-import {Relayer} from "../src/test/Relayer.sol";
-import {IPromise} from "../src/interfaces/IPromise.sol";
-import {PredeployAddresses} from "../src/libraries/PredeployAddresses.sol";
+contract PromiseTest is Test {
+    Promise public promiseContract;
 
-contract PromiseTest is Relayer, Test {
-    IPromise public p = IPromise(PredeployAddresses.PROMISE);
-    L2NativeSuperchainERC20 public token;
+    address public alice = address(0x1);
+    address public bob = address(0x2);
 
-    event HandlerCalled();
-
-    bool public handlerCalled;
-
-    string[] private rpcUrls = [
-        vm.envOr("CHAIN_A_RPC_URL", string("https://interop-alpha-0.optimism.io")),
-        vm.envOr("CHAIN_B_RPC_URL", string("https://interop-alpha-1.optimism.io"))
-    ];
-
-    constructor() Relayer(rpcUrls) {}
+    event PromiseCreated(bytes32 indexed promiseId, address indexed resolver);
+    event PromiseResolved(bytes32 indexed promiseId, bytes returnData);
+    event PromiseRejected(bytes32 indexed promiseId, bytes errorData);
 
     function setUp() public {
-        vm.selectFork(forkIds[0]);
-        token = new L2NativeSuperchainERC20{salt: bytes32(0)}();
-
-        vm.selectFork(forkIds[1]);
-        new L2NativeSuperchainERC20{salt: bytes32(0)}();
-
-        // mint tokens on chain B
-        token.mint(address(this), 100);
+        promiseContract = new Promise(address(0));
     }
 
-    modifier async() {
-        require(msg.sender == address(p), "PromiseTest: caller not Promise");
-        _;
-    }
+    function test_createPromise() public {
+        bytes32 expectedId = promiseContract.generateGlobalPromiseId(block.chainid, bytes32(uint256(1)));
 
-    function test_then_succeeds() public {
-        vm.selectFork(forkIds[0]);
+        vm.expectEmit(true, true, false, true);
+        emit PromiseCreated(expectedId, alice);
 
-        // context is empty
-        assertEq(p.promiseContext().length, 0);
-        assertEq(p.promiseRelayIdentifier().origin, address(0));
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
 
-        // example IERC20 remote balanceOf query
-        bytes32 msgHash = p.sendMessage(
-            chainIdByForkId[forkIds[1]], address(token), abi.encodeCall(IERC20.balanceOf, (address(this)))
+        assertEq(promiseId, expectedId, "First promise should have correct global ID");
+
+        Promise.PromiseData memory data = promiseContract.getPromise(promiseId);
+        assertEq(data.resolver, alice, "Resolver should be alice");
+        assertEq(uint256(data.status), uint256(Promise.PromiseStatus.Pending), "Status should be Pending");
+        assertEq(data.returnData, "", "Return data should be empty");
+
+        assertTrue(promiseContract.exists(promiseId), "Promise should exist");
+        assertEq(
+            uint256(promiseContract.status(promiseId)),
+            uint256(Promise.PromiseStatus.Pending),
+            "Status should be Pending"
         );
-        p.then(msgHash, this.balanceHandler.selector, "abc");
-
-        relayAllMessages();
-
-        relayAllPromises(p, chainIdByForkId[forkIds[0]]);
-
-        assertEq(handlerCalled, true);
-        // context is empty
-        assertEq(p.promiseContext().length, 0);
-        assertEq(p.promiseRelayIdentifier().origin, address(0));
     }
 
-    function balanceHandler(uint256 balance) public async {
-        handlerCalled = true;
-        require(balance == 100, "PromiseTest: balance mismatch");
+    function test_createMultiplePromises() public {
+        vm.prank(alice);
+        bytes32 promiseId1 = promiseContract.create();
 
-        Identifier memory id = p.promiseRelayIdentifier();
-        require(id.origin == address(p), "PromiseTest: origin mismatch");
+        vm.prank(bob);
+        bytes32 promiseId2 = promiseContract.create();
 
-        bytes memory context = p.promiseContext();
-        require(keccak256(context) == keccak256("abc"), "PromiseTest: context mismatch");
+        bytes32 expectedId1 = promiseContract.generateGlobalPromiseId(block.chainid, bytes32(uint256(1)));
+        bytes32 expectedId2 = promiseContract.generateGlobalPromiseId(block.chainid, bytes32(uint256(2)));
 
-        emit HandlerCalled();
-    }
-}
+        assertEq(promiseId1, expectedId1, "First promise should have correct global ID");
+        assertEq(promiseId2, expectedId2, "Second promise should have correct global ID");
 
-/// @notice Thrown when attempting to mint or burn tokens and the account is the zero address.
-error ZeroAddress();
+        Promise.PromiseData memory data1 = promiseContract.getPromise(promiseId1);
+        Promise.PromiseData memory data2 = promiseContract.getPromise(promiseId2);
 
-/// @title L2NativeSuperchainERC20
-/// @notice Mock implementation of a native Superchain ERC20 token that is L2 native (not backed by an L1 native token).
-/// The mint/burn functionality is intentionally open to ANYONE to make it easier to test with. For production use,
-/// this functionality should be restricted.
-contract L2NativeSuperchainERC20 is SuperchainERC20 {
-    /// @notice Emitted whenever tokens are minted for an account.
-    /// @param account Address of the account tokens are being minted for.
-    /// @param amount  Amount of tokens minted.
-    event Mint(address indexed account, uint256 amount);
-
-    /// @notice Emitted whenever tokens are burned from an account.
-    /// @param account Address of the account tokens are being burned from.
-    /// @param amount  Amount of tokens burned.
-    event Burn(address indexed account, uint256 amount);
-
-    /// @notice Allows ANYONE to mint tokens. For production use, this should be restricted.
-    /// @param _to     Address to mint tokens to.
-    /// @param _amount Amount of tokens to mint.
-    function mint(address _to, uint256 _amount) external virtual {
-        if (_to == address(0)) revert ZeroAddress();
-
-        _mint(_to, _amount);
-
-        emit Mint(_to, _amount);
+        assertEq(data1.resolver, alice, "First promise resolver should be alice");
+        assertEq(data2.resolver, bob, "Second promise resolver should be bob");
     }
 
-    /// @notice Allows ANYONE to burn tokens. For production use, this should be restricted.
-    /// @param _from   Address to burn tokens from.
-    /// @param _amount Amount of tokens to burn.
-    function burn(address _from, uint256 _amount) external virtual {
-        if (_from == address(0)) revert ZeroAddress();
+    function test_resolvePromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
 
-        _burn(_from, _amount);
+        bytes memory returnData = abi.encode(uint256(42));
 
-        emit Burn(_from, _amount);
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true);
+        emit PromiseResolved(promiseId, returnData);
+
+        promiseContract.resolve(promiseId, returnData);
+
+        Promise.PromiseData memory data = promiseContract.getPromise(promiseId);
+        assertEq(uint256(data.status), uint256(Promise.PromiseStatus.Resolved), "Status should be Resolved");
+        assertEq(data.returnData, returnData, "Return data should match");
+        assertEq(
+            uint256(promiseContract.status(promiseId)),
+            uint256(Promise.PromiseStatus.Resolved),
+            "Status should be Resolved"
+        );
     }
 
-    function name() public pure virtual override returns (string memory) {
-        return "L2NativeSuperchainERC20";
+    function test_rejectPromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory errorData = abi.encode("Something went wrong");
+
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true);
+        emit PromiseRejected(promiseId, errorData);
+
+        promiseContract.reject(promiseId, errorData);
+
+        Promise.PromiseData memory data = promiseContract.getPromise(promiseId);
+        assertEq(uint256(data.status), uint256(Promise.PromiseStatus.Rejected), "Status should be Rejected");
+        assertEq(data.returnData, errorData, "Error data should match");
+        assertEq(
+            uint256(promiseContract.status(promiseId)),
+            uint256(Promise.PromiseStatus.Rejected),
+            "Status should be Rejected"
+        );
     }
 
-    function symbol() public pure virtual override returns (string memory) {
-        return "MOCK";
+    function test_onlyResolverCanResolve() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory returnData = abi.encode(uint256(42));
+
+        vm.prank(bob);
+        vm.expectRevert("Promise: only resolver can resolve");
+        promiseContract.resolve(promiseId, returnData);
     }
 
-    function decimals() public pure override returns (uint8) {
-        return 18;
+    function test_onlyResolverCanReject() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory errorData = abi.encode("Error");
+
+        vm.prank(bob);
+        vm.expectRevert("Promise: only resolver can reject");
+        promiseContract.reject(promiseId, errorData);
+    }
+
+    function test_cannotResolveNonExistentPromise() public {
+        bytes memory returnData = abi.encode(uint256(42));
+
+        vm.expectRevert("Promise: only resolver can resolve");
+        promiseContract.resolve(bytes32(uint256(999)), returnData);
+    }
+
+    function test_cannotRejectNonExistentPromise() public {
+        bytes memory errorData = abi.encode("Error");
+
+        vm.expectRevert("Promise: only resolver can reject");
+        promiseContract.reject(bytes32(uint256(999)), errorData);
+    }
+
+    function test_cannotResolveAlreadyResolvedPromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory returnData1 = abi.encode(uint256(42));
+        bytes memory returnData2 = abi.encode(uint256(100));
+
+        vm.prank(alice);
+        promiseContract.resolve(promiseId, returnData1);
+
+        vm.prank(alice);
+        vm.expectRevert("Promise: promise already settled");
+        promiseContract.resolve(promiseId, returnData2);
+    }
+
+    function test_cannotRejectAlreadyResolvedPromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory returnData = abi.encode(uint256(42));
+        bytes memory errorData = abi.encode("Error");
+
+        vm.prank(alice);
+        promiseContract.resolve(promiseId, returnData);
+
+        vm.prank(alice);
+        vm.expectRevert("Promise: promise already settled");
+        promiseContract.reject(promiseId, errorData);
+    }
+
+    function test_cannotResolveAlreadyRejectedPromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory errorData = abi.encode("Error");
+        bytes memory returnData = abi.encode(uint256(42));
+
+        vm.prank(alice);
+        promiseContract.reject(promiseId, errorData);
+
+        vm.prank(alice);
+        vm.expectRevert("Promise: promise already settled");
+        promiseContract.resolve(promiseId, returnData);
+    }
+
+    function test_cannotRejectedAlreadyRejectedPromise() public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory errorData1 = abi.encode("Error 1");
+        bytes memory errorData2 = abi.encode("Error 2");
+
+        vm.prank(alice);
+        promiseContract.reject(promiseId, errorData1);
+
+        vm.prank(alice);
+        vm.expectRevert("Promise: promise already settled");
+        promiseContract.reject(promiseId, errorData2);
+    }
+
+    function test_statusOfNonExistentPromise() public {
+        // Non-existent promises return Pending status (cross-chain compatible behavior)
+        assertEq(uint256(promiseContract.status(bytes32(uint256(999)))), uint256(Promise.PromiseStatus.Pending));
+    }
+
+    function test_getPromiseOfNonExistentPromise() public {
+        // Non-existent promises return empty data (cross-chain compatible behavior)
+        Promise.PromiseData memory data = promiseContract.getPromise(bytes32(uint256(999)));
+        assertEq(data.resolver, address(0));
+        assertEq(uint256(data.status), uint256(Promise.PromiseStatus.Pending));
+        assertEq(data.returnData.length, 0);
+    }
+
+    function test_existsReturnsFalseForNonExistentPromise() public {
+        assertFalse(promiseContract.exists(bytes32(uint256(999))), "Non-existent promise should not exist");
+    }
+
+    function test_getNonce() public {
+        assertEq(promiseContract.getNonce(), 1, "Next nonce should start at 1");
+
+        vm.prank(alice);
+        promiseContract.create();
+
+        assertEq(promiseContract.getNonce(), 2, "Next nonce should be 2 after creating one promise");
+
+        vm.prank(bob);
+        promiseContract.create();
+
+        assertEq(promiseContract.getNonce(), 3, "Next nonce should be 3 after creating two promises");
+    }
+
+    function testFuzz_createAndResolvePromise(uint256 value, string memory message) public {
+        vm.prank(alice);
+        bytes32 promiseId = promiseContract.create();
+
+        bytes memory returnData = abi.encode(value, message);
+
+        vm.prank(alice);
+        promiseContract.resolve(promiseId, returnData);
+
+        Promise.PromiseData memory data = promiseContract.getPromise(promiseId);
+        assertEq(uint256(data.status), uint256(Promise.PromiseStatus.Resolved), "Status should be Resolved");
+        assertEq(data.returnData, returnData, "Return data should match");
+
+        (uint256 decodedValue, string memory decodedMessage) = abi.decode(data.returnData, (uint256, string));
+        assertEq(decodedValue, value, "Decoded value should match");
+        assertEq(decodedMessage, message, "Decoded message should match");
     }
 }
