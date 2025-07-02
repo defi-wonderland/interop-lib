@@ -106,34 +106,33 @@ contract SwapThenBridgeTest is Relayer, Test {
         vm.startPrank(user);
         token1.transfer(address(callbackHandler), 1000 ether);
 
+        // Approve token2 for bridging
+        token2.approve(address(callbackHandler), 1000 ether);
+
         // Create promise to swap tokens on chain A
         bytes32 promiseId = promiseA.create();
         bytes32 promiseId2 =
             callbackA.then(promiseId, address(callbackHandler), CallbackHandler.handleInitialSwap.selector);
         // Create promise to bridge tokens to chain B
         bytes32 promiseId3 = callbackA.then(promiseId2, address(callbackHandler), CallbackHandler.handleBridge.selector);
-
         promiseA.resolve(
             promiseId, abi.encode(chainIdByForkId[forkIds[1]], address(token1), address(token2), 1000 ether)
         );
         callbackA.resolve(promiseId2);
-
-        token2.approve(address(callbackHandler), 1000 ether);
-        callbackA.resolve(promiseId3);
-
-        promiseA.shareResolvedPromise(chainIdByForkId[forkIds[1]], promiseId3);
-
         assertEq(token2.balanceOf(user), 1000 ether);
+
+        callbackA.resolve(promiseId3);
 
         bytes32 promiseId4 = callbackB.thenOn(
             chainIdByForkId[forkIds[1]], promiseId3, address(callbackHandler), CallbackHandler.handleSecondSwap.selector
         );
 
+        promiseA.shareResolvedPromise(chainIdByForkId[forkIds[1]], promiseId3);
+
         vm.selectFork(forkIds[1]);
         relayAllMessages();
 
         token2.approve(address(callbackHandler), 1000 ether);
-
         callbackB.resolve(promiseId4);
 
         vm.stopPrank();
@@ -211,7 +210,7 @@ contract CallbackHandler {
 
     function handleInitialSwap(bytes memory _data)
         public
-        returns (uint256 chainId_, address fromToken_, address destToken_, uint256 amount_)
+        returns (uint256 chainId_, address destToken_, address fromToken_, uint256 amount_)
     {
         (uint256 destinationId, address tokenIn, address tokenOut, uint256 amountIn) =
             abi.decode(_data, (uint256, address, address, uint256));
@@ -234,10 +233,8 @@ contract CallbackHandler {
         amount_ = amountOut;
     }
 
-    function handleSecondSwap(address tokenIn, address tokenOut, uint256 amountIn)
-        public
-        returns (uint256 amountOut_)
-    {
+    function handleSecondSwap(bytes memory _data) public returns (uint256 amountOut_) {
+        (address tokenIn, address tokenOut, uint256 amountIn) = abi.decode(_data, (address, address, uint256));
         console2.log("Handling second swap");
         console2.log("==================================================");
         console2.log("Token in: ", tokenIn);
@@ -251,10 +248,9 @@ contract CallbackHandler {
         console2.log("Amount out: ", amountOut_);
     }
 
-    function handleBridge(uint256 destinationId, address bridgeToken, address otherToken, uint256 amount)
-        public
-        returns (address tokenIn_, address tokenOut_, uint256 amount_)
-    {
+    function handleBridge(bytes memory _data) public returns (address tokenIn_, address tokenOut_, uint256 amount_) {
+        (uint256 destinationId, address bridgeToken, address otherToken, uint256 amount) =
+            abi.decode(_data, (uint256, address, address, uint256));
         console2.log("Handling bridge");
         console2.log("==================================================");
         console2.log("Bridge token: ", bridgeToken);
