@@ -54,7 +54,7 @@ contract GasTank is IGasTank {
     /// @notice Initiates a withdrawal of funds from the gas tank
     /// @param _amount The amount of funds to initiate a withdrawal for
     function initiateWithdrawal(uint256 _amount) external {
-        withdrawals[msg.sender] = Withdrawal({ timestamp: block.timestamp, amount: _amount });
+        withdrawals[msg.sender] = Withdrawal({timestamp: block.timestamp, amount: _amount});
 
         emit WithdrawalInitiated(msg.sender, _amount);
     }
@@ -72,7 +72,7 @@ contract GasTank is IGasTank {
 
         delete withdrawals[msg.sender];
 
-        new SafeSend{ value: amount }(payable(_to));
+        new SafeSend{value: amount}(payable(_to));
 
         emit WithdrawalFinalized(msg.sender, _to, amount);
     }
@@ -91,10 +91,7 @@ contract GasTank is IGasTank {
     /// @notice Relays a message to the destination chain
     /// @param _id The identifier of the message
     /// @param _sentMessage The sent message event payload
-    function relayMessage(
-        Identifier calldata _id,
-        bytes calldata _sentMessage
-    )
+    function relayMessage(Identifier calldata _id, bytes calldata _sentMessage)
         external
         returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_)
     {
@@ -159,9 +156,9 @@ contract GasTank is IGasTank {
 
         claimed[messageHash] = true;
 
-        new SafeSend{ value: relayCost }(payable(relayer));
+        new SafeSend{value: relayCost}(payable(relayer));
 
-        new SafeSend{ value: claimCost }(payable(msg.sender));
+        new SafeSend{value: claimCost}(payable(msg.sender));
 
         emit Claimed(messageHash, relayer, _gasProvider, msg.sender, relayCost, claimCost);
     }
@@ -222,10 +219,7 @@ contract GasTank is IGasTank {
     /// @param _source The source chain ID
     /// @param _sentMessage The sent message
     /// @return messageHash_ The hash of the message
-    function _getMessageHash(
-        uint256 _source,
-        bytes calldata _sentMessage
-    )
+    function _getMessageHash(uint256 _source, bytes calldata _sentMessage)
         internal
         pure
         returns (bytes32 messageHash_)

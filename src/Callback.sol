@@ -10,10 +10,10 @@ import {IL2ToL2CrossDomainMessenger} from "./interfaces/IL2ToL2CrossDomainMessen
 contract Callback is IResolvable {
     /// @notice The Promise contract instance
     Promise public immutable promiseContract;
-    
+
     /// @notice Cross-domain messenger for sending cross-chain messages (optional)
     IL2ToL2CrossDomainMessenger public immutable messenger;
-    
+
     /// @notice Current chain ID for generating global promise IDs (optional)
     uint256 public immutable currentChainId;
 
@@ -22,14 +22,15 @@ contract Callback is IResolvable {
 
     /// @notice Current callback context - who registered the currently executing callback
     address internal currentCallbackRegistrant;
-    
+
     /// @notice Current callback context - which chain the currently executing callback was registered from
     uint256 internal currentCallbackSourceChain;
 
     /// @notice Callback types for handling different promise states
     enum CallbackType {
-        Then,   // Executes when parent promise resolves
-        Catch   // Executes when parent promise rejects
+        Then, // Executes when parent promise resolves
+        Catch // Executes when parent promise rejects
+
     }
 
     /// @notice Callback data structure
@@ -38,15 +39,17 @@ contract Callback is IResolvable {
         address target;
         bytes4 selector;
         CallbackType callbackType;
-        address registrant;     // Who registered this callback
-        uint256 sourceChain;    // Which chain it was registered from
+        address registrant; // Who registered this callback
+        uint256 sourceChain; // Which chain it was registered from
     }
 
     /// @notice Mapping from callback promise ID to callback data
     mapping(bytes32 => CallbackData) public callbacks;
 
     /// @notice Event emitted when a callback is registered
-    event CallbackRegistered(bytes32 indexed callbackPromiseId, bytes32 indexed parentPromiseId, CallbackType callbackType);
+    event CallbackRegistered(
+        bytes32 indexed callbackPromiseId, bytes32 indexed parentPromiseId, CallbackType callbackType
+    );
 
     /// @notice Event emitted when a callback is executed
     event CallbackExecuted(bytes32 indexed callbackPromiseId, bool success, bytes returnData);
@@ -64,10 +67,13 @@ contract Callback is IResolvable {
     /// @param target The contract address to call when parent resolves
     /// @param selector The function selector to call
     /// @return callbackPromiseId The ID of the created callback promise
-    function then(bytes32 parentPromiseId, address target, bytes4 selector) external returns (bytes32 callbackPromiseId) {
+    function then(bytes32 parentPromiseId, address target, bytes4 selector)
+        external
+        returns (bytes32 callbackPromiseId)
+    {
         // Create a new promise for this callback
         callbackPromiseId = promiseContract.create();
-        
+
         // Store the callback data
         callbacks[callbackPromiseId] = CallbackData({
             parentPromiseId: parentPromiseId,
@@ -77,7 +83,7 @@ contract Callback is IResolvable {
             registrant: msg.sender,
             sourceChain: currentChainId
         });
-        
+
         emit CallbackRegistered(callbackPromiseId, parentPromiseId, CallbackType.Then);
     }
 
@@ -86,10 +92,13 @@ contract Callback is IResolvable {
     /// @param target The contract address to call when parent rejects
     /// @param selector The function selector to call
     /// @return callbackPromiseId The ID of the created callback promise
-    function catchError(bytes32 parentPromiseId, address target, bytes4 selector) external returns (bytes32 callbackPromiseId) {
+    function catchError(bytes32 parentPromiseId, address target, bytes4 selector)
+        external
+        returns (bytes32 callbackPromiseId)
+    {
         // Create a new promise for this callback
         callbackPromiseId = promiseContract.create();
-        
+
         // Store the callback data
         callbacks[callbackPromiseId] = CallbackData({
             parentPromiseId: parentPromiseId,
@@ -99,7 +108,7 @@ contract Callback is IResolvable {
             registrant: msg.sender,
             sourceChain: currentChainId
         });
-        
+
         emit CallbackRegistered(callbackPromiseId, parentPromiseId, CallbackType.Catch);
     }
 
@@ -109,30 +118,33 @@ contract Callback is IResolvable {
     /// @param target The contract address to call when parent resolves
     /// @param selector The function selector to call
     /// @return callbackPromiseId The ID of the created callback promise
-    function thenOn(uint256 destinationChain, bytes32 parentPromiseId, address target, bytes4 selector) external returns (bytes32 callbackPromiseId) {
+    function thenOn(uint256 destinationChain, bytes32 parentPromiseId, address target, bytes4 selector)
+        external
+        returns (bytes32 callbackPromiseId)
+    {
         require(address(messenger) != address(0), "Callback: cross-chain not enabled");
         require(destinationChain != currentChainId, "Callback: cannot register callback on same chain");
-        
+
         // Create a new promise for this callback
         callbackPromiseId = promiseContract.create();
-        
+
         // Transfer resolution rights to destination chain
         promiseContract.transferResolve(callbackPromiseId, destinationChain, address(this));
-        
+
         // Send cross-chain message to register callback on destination chain
         bytes memory message = abi.encodeWithSignature(
             "receiveCallbackRegistration(bytes32,bytes32,address,bytes4,uint8,address,uint256)",
             callbackPromiseId,
-            parentPromiseId, 
+            parentPromiseId,
             target,
             selector,
             uint8(CallbackType.Then),
-            msg.sender,      // Include original registrant
-            currentChainId   // Include source chain ID
+            msg.sender, // Include original registrant
+            currentChainId // Include source chain ID
         );
-        
+
         messenger.sendMessage(destinationChain, address(this), message);
-        
+
         emit CallbackRegistered(callbackPromiseId, parentPromiseId, CallbackType.Then);
     }
 
@@ -142,36 +154,39 @@ contract Callback is IResolvable {
     /// @param target The contract address to call when parent rejects
     /// @param selector The function selector to call
     /// @return callbackPromiseId The ID of the created callback promise
-    function catchErrorOn(uint256 destinationChain, bytes32 parentPromiseId, address target, bytes4 selector) external returns (bytes32 callbackPromiseId) {
+    function catchErrorOn(uint256 destinationChain, bytes32 parentPromiseId, address target, bytes4 selector)
+        external
+        returns (bytes32 callbackPromiseId)
+    {
         require(address(messenger) != address(0), "Callback: cross-chain not enabled");
         require(destinationChain != currentChainId, "Callback: cannot register callback on same chain");
-        
+
         // Create a new promise for this callback
         callbackPromiseId = promiseContract.create();
-        
+
         // Transfer resolution rights to destination chain
         promiseContract.transferResolve(callbackPromiseId, destinationChain, address(this));
-        
+
         // Send cross-chain message to register callback on destination chain
         bytes memory message = abi.encodeWithSignature(
             "receiveCallbackRegistration(bytes32,bytes32,address,bytes4,uint8,address,uint256)",
             callbackPromiseId,
             parentPromiseId,
-            target, 
+            target,
             selector,
             uint8(CallbackType.Catch),
-            msg.sender,      // Include original registrant
-            currentChainId   // Include source chain ID
+            msg.sender, // Include original registrant
+            currentChainId // Include source chain ID
         );
-        
+
         messenger.sendMessage(destinationChain, address(this), message);
-        
+
         emit CallbackRegistered(callbackPromiseId, parentPromiseId, CallbackType.Catch);
     }
 
     /// @notice Receive callback registration from another chain
     /// @param callbackPromiseId The global callback promise ID
-    /// @param parentPromiseId The parent promise ID to watch  
+    /// @param parentPromiseId The parent promise ID to watch
     /// @param target The contract address to call when parent settles
     /// @param selector The function selector to call
     /// @param callbackType The type of callback (Then or Catch)
@@ -189,7 +204,7 @@ contract Callback is IResolvable {
         // Verify the message comes from another Callback contract via cross-domain messenger
         require(msg.sender == address(messenger), "Callback: only messenger can call");
         require(messenger.crossDomainMessageSender() == address(this), "Callback: only from Callback contract");
-        
+
         // Store the callback data locally with auth tracking
         callbacks[callbackPromiseId] = CallbackData({
             parentPromiseId: parentPromiseId,
@@ -199,7 +214,7 @@ contract Callback is IResolvable {
             registrant: registrant,
             sourceChain: sourceChain
         });
-        
+
         emit CallbackRegistered(callbackPromiseId, parentPromiseId, CallbackType(callbackType));
     }
 
@@ -207,21 +222,15 @@ contract Callback is IResolvable {
     /// @dev Will revert if no callback is currently being executed
     /// @return The address that registered the currently executing callback
     function callbackRegistrant() external view returns (address) {
-        require(
-            currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT, 
-            "Callback: no callback currently executing"
-        );
+        require(currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT, "Callback: no callback currently executing");
         return currentCallbackRegistrant;
     }
 
-    /// @notice Get the source chain of the currently executing callback  
+    /// @notice Get the source chain of the currently executing callback
     /// @dev Will revert if no callback is currently being executed
     /// @return The chain ID where the currently executing callback was registered
     function callbackSourceChain() external view returns (uint256) {
-        require(
-            currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT,
-            "Callback: no callback currently executing" 
-        );
+        require(currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT, "Callback: no callback currently executing");
         return currentCallbackSourceChain;
     }
 
@@ -230,10 +239,7 @@ contract Callback is IResolvable {
     /// @return registrant The address that registered the currently executing callback
     /// @return sourceChain The chain ID where the currently executing callback was registered
     function callbackContext() external view returns (address registrant, uint256 sourceChain) {
-        require(
-            currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT,
-            "Callback: no callback currently executing"
-        );
+        require(currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT, "Callback: no callback currently executing");
         return (currentCallbackRegistrant, currentCallbackSourceChain);
     }
 
@@ -242,22 +248,24 @@ contract Callback is IResolvable {
     function resolve(bytes32 callbackPromiseId) external {
         CallbackData memory callbackData = callbacks[callbackPromiseId];
         require(callbackData.target != address(0), "Callback: callback does not exist");
-        
+
         // Check that callback promise is still pending
         Promise.PromiseStatus callbackStatus = promiseContract.status(callbackPromiseId);
         require(callbackStatus == Promise.PromiseStatus.Pending, "Callback: callback already settled");
-        
+
         // Get parent promise data
         Promise.PromiseData memory parentPromise = promiseContract.getPromise(callbackData.parentPromiseId);
-        
+
         // Check if callback should execute based on parent state and callback type
         bool shouldExecute = false;
         if (callbackData.callbackType == CallbackType.Then && parentPromise.status == Promise.PromiseStatus.Resolved) {
             shouldExecute = true;
-        } else if (callbackData.callbackType == CallbackType.Catch && parentPromise.status == Promise.PromiseStatus.Rejected) {
+        } else if (
+            callbackData.callbackType == CallbackType.Catch && parentPromise.status == Promise.PromiseStatus.Rejected
+        ) {
             shouldExecute = true;
         }
-        
+
         if (!shouldExecute) {
             // If parent is still pending, cannot execute yet
             if (parentPromise.status == Promise.PromiseStatus.Pending) {
@@ -271,26 +279,25 @@ contract Callback is IResolvable {
                 return;
             }
         }
-        
+
         // Re-entrancy protection: if currentCallbackRegistrant is not the default value,
         // this function is being re-entered. Revert to prevent re-entrancy attacks.
         if (currentCallbackRegistrant != DEFAULT_CALLBACK_REGISTRANT) {
             revert("Callback: re-entrant call detected");
         }
-        
+
         // Set callback context before execution
         currentCallbackRegistrant = callbackData.registrant;
         currentCallbackSourceChain = callbackData.sourceChain;
-        
+
         // Execute the callback
-        (bool success, bytes memory returnData) = callbackData.target.call(
-            abi.encodeWithSelector(callbackData.selector, parentPromise.returnData)
-        );
-        
+        (bool success, bytes memory returnData) =
+            callbackData.target.call(abi.encodeWithSelector(callbackData.selector, parentPromise.returnData));
+
         // Clear callback context after execution
         currentCallbackRegistrant = DEFAULT_CALLBACK_REGISTRANT;
         currentCallbackSourceChain = 0;
-        
+
         if (success) {
             // Resolve the callback promise with the return value from the callback
             promiseContract.resolve(callbackPromiseId, returnData);
@@ -298,10 +305,10 @@ contract Callback is IResolvable {
             // Reject the callback promise with the error data
             promiseContract.reject(callbackPromiseId, returnData);
         }
-        
+
         // Clean up storage
         delete callbacks[callbackPromiseId];
-        
+
         emit CallbackExecuted(callbackPromiseId, success, returnData);
     }
 
@@ -311,23 +318,25 @@ contract Callback is IResolvable {
     function canResolve(bytes32 callbackPromiseId) external view returns (bool canResolveCallback) {
         CallbackData memory callbackData = callbacks[callbackPromiseId];
         if (callbackData.target == address(0)) return false;
-        
+
         // Check callback promise status
         Promise.PromiseStatus callbackStatus = promiseContract.status(callbackPromiseId);
         if (callbackStatus != Promise.PromiseStatus.Pending) return false;
-        
+
         // Check parent promise status
         Promise.PromiseData memory parentPromise = promiseContract.getPromise(callbackData.parentPromiseId);
-        
+
         if (callbackData.callbackType == CallbackType.Then && parentPromise.status == Promise.PromiseStatus.Resolved) {
             return true;
-        } else if (callbackData.callbackType == CallbackType.Catch && parentPromise.status == Promise.PromiseStatus.Rejected) {
+        } else if (
+            callbackData.callbackType == CallbackType.Catch && parentPromise.status == Promise.PromiseStatus.Rejected
+        ) {
             return true;
         } else if (parentPromise.status != Promise.PromiseStatus.Pending) {
             // Parent is settled but doesn't match callback type
             return true; // Can resolve to reject the callback
         }
-        
+
         return false;
     }
 
@@ -344,4 +353,4 @@ contract Callback is IResolvable {
     function exists(bytes32 callbackPromiseId) external view returns (bool callbackExists) {
         return callbacks[callbackPromiseId].target != address(0);
     }
-} 
+}

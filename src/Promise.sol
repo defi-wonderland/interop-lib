@@ -28,7 +28,7 @@ contract Promise {
 
     /// @notice Cross-domain messenger for sending cross-chain messages (optional)
     IL2ToL2CrossDomainMessenger public immutable messenger;
-    
+
     /// @notice Current chain ID for generating global promise IDs (optional)
     uint256 public immutable currentChainId;
 
@@ -45,7 +45,9 @@ contract Promise {
     event ResolvedPromiseShared(bytes32 indexed promiseId, uint256 indexed destinationChain);
 
     /// @notice Event emitted when resolution is transferred to another chain
-    event ResolutionTransferred(bytes32 indexed promiseId, uint256 indexed destinationChain, address indexed newResolver);
+    event ResolutionTransferred(
+        bytes32 indexed promiseId, uint256 indexed destinationChain, address indexed newResolver
+    );
 
     /// @notice Constructor
     /// @param _messenger The cross-domain messenger contract address (use address(0) for local-only mode)
@@ -54,13 +56,15 @@ contract Promise {
         currentChainId = block.chainid;
     }
 
-
-
     /// @notice Generate a global promise ID from chain ID and nonce
     /// @param chainId The chain ID where the promise was created
     /// @param nonceValue The nonce on that chain
     /// @return globalPromiseId The globally unique promise ID
-    function generateGlobalPromiseId(uint256 chainId, bytes32 nonceValue) public pure returns (bytes32 globalPromiseId) {
+    function generateGlobalPromiseId(uint256 chainId, bytes32 nonceValue)
+        public
+        pure
+        returns (bytes32 globalPromiseId)
+    {
         return keccak256(abi.encode(chainId, nonceValue));
     }
 
@@ -76,12 +80,8 @@ contract Promise {
     function create() external returns (bytes32 promiseId) {
         uint256 currentNonce = nonce++;
         promiseId = generateGlobalPromiseId(currentChainId, bytes32(currentNonce));
-        
-        promises[promiseId] = PromiseData({
-            resolver: msg.sender,
-            status: PromiseStatus.Pending,
-            returnData: ""
-        });
+
+        promises[promiseId] = PromiseData({resolver: msg.sender, status: PromiseStatus.Pending, returnData: ""});
 
         emit PromiseCreated(promiseId, msg.sender);
     }
@@ -147,22 +147,22 @@ contract Promise {
     function shareResolvedPromise(uint256 destinationChain, bytes32 promiseId) external {
         require(address(messenger) != address(0), "Promise: cross-chain not enabled");
         require(destinationChain != currentChainId, "Promise: cannot share to same chain");
-        
+
         PromiseData memory promiseData = promises[promiseId];
         require(promiseData.status != PromiseStatus.Pending, "Promise: can only share settled promises");
-        
+
         // Encode the call to receiveSharedPromise
         bytes memory message = abi.encodeWithSignature(
-            "receiveSharedPromise(bytes32,uint8,bytes,address)", 
-            promiseId, 
-            uint8(promiseData.status), 
+            "receiveSharedPromise(bytes32,uint8,bytes,address)",
+            promiseId,
+            uint8(promiseData.status),
             promiseData.returnData,
             promiseData.resolver
         );
-        
+
         // Send cross-chain message
         messenger.sendMessage(destinationChain, address(this), message);
-        
+
         emit ResolvedPromiseShared(promiseId, destinationChain);
     }
 
@@ -173,24 +173,21 @@ contract Promise {
     function transferResolve(bytes32 promiseId, uint256 destinationChain, address newResolver) external {
         require(address(messenger) != address(0), "Promise: cross-chain not enabled");
         require(destinationChain != currentChainId, "Promise: cannot transfer to same chain");
-        
+
         PromiseData storage promiseData = promises[promiseId];
         require(promiseData.status == PromiseStatus.Pending, "Promise: promise already settled");
         require(msg.sender == promiseData.resolver, "Promise: only resolver can transfer");
-        
+
         // Encode the call to receiveResolverTransfer
-        bytes memory message = abi.encodeWithSignature(
-            "receiveResolverTransfer(bytes32,address)", 
-            promiseId, 
-            newResolver
-        );
-        
+        bytes memory message =
+            abi.encodeWithSignature("receiveResolverTransfer(bytes32,address)", promiseId, newResolver);
+
         // Send cross-chain message
         messenger.sendMessage(destinationChain, address(this), message);
-        
+
         // Clear local promise data after transfer
         delete promises[promiseId];
-        
+
         emit ResolutionTransferred(promiseId, destinationChain, newResolver);
     }
 
@@ -199,23 +196,17 @@ contract Promise {
     /// @param promiseStatus The status of the shared promise
     /// @param returnData The return data of the shared promise
     /// @param resolver The resolver address of the shared promise
-    function receiveSharedPromise(
-        bytes32 promiseId, 
-        uint8 promiseStatus, 
-        bytes memory returnData,
-        address resolver
-    ) external {
+    function receiveSharedPromise(bytes32 promiseId, uint8 promiseStatus, bytes memory returnData, address resolver)
+        external
+    {
         // Verify the message comes from another Promise contract via cross-domain messenger
         require(msg.sender == address(messenger), "Promise: only messenger can call");
         require(messenger.crossDomainMessageSender() == address(this), "Promise: only from Promise contract");
-        
+
         // Store the shared promise data
-        promises[promiseId] = PromiseData({
-            resolver: resolver,
-            status: PromiseStatus(promiseStatus),
-            returnData: returnData
-        });
-        
+        promises[promiseId] =
+            PromiseData({resolver: resolver, status: PromiseStatus(promiseStatus), returnData: returnData});
+
         // Emit appropriate event based on status
         if (PromiseStatus(promiseStatus) == PromiseStatus.Resolved) {
             emit PromiseResolved(promiseId, returnData);
@@ -231,14 +222,10 @@ contract Promise {
         // Verify the message comes from another Promise contract via cross-domain messenger
         require(msg.sender == address(messenger), "Promise: only messenger can call");
         require(messenger.crossDomainMessageSender() == address(this), "Promise: only from Promise contract");
-        
+
         // Create or update the promise with the new resolver
-        promises[promiseId] = PromiseData({
-            resolver: newResolver,
-            status: PromiseStatus.Pending,
-            returnData: ""
-        });
-        
+        promises[promiseId] = PromiseData({resolver: newResolver, status: PromiseStatus.Pending, returnData: ""});
+
         emit PromiseCreated(promiseId, newResolver);
     }
 }

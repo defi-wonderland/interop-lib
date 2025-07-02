@@ -2,9 +2,9 @@
 pragma solidity ^0.8.0;
 
 // Interfaces
-import { IERC7802 } from "./IERC7802.sol";
-import { IERC20Solady as IERC20 } from "@solady-v0.0.245/interfaces/IERC20.sol";
-import { ISemver } from "./ISemver.sol";
+import {IERC7802} from "./IERC7802.sol";
+import {IERC20Solady as IERC20} from "@solady-v0.0.245/interfaces/IERC20.sol";
+import {ISemver} from "./ISemver.sol";
 
 /// @title ISuperchainERC20
 /// @notice This interface is available on the SuperchainERC20 contract.
