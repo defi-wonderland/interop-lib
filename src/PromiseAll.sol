@@ -13,7 +13,7 @@ contract PromiseAll is IResolvable {
 
     /// @notice Structure to track a PromiseAll instance
     struct PromiseAllData {
-        bytes32[] inputPromises;     // Array of input promise IDs
+        bytes32[] inputPromises; // Array of input promise IDs
     }
 
     /// @notice Mapping from PromiseAll promise ID to its data
@@ -38,14 +38,14 @@ contract PromiseAll is IResolvable {
     /// @return promiseAllId The ID of the created PromiseAll promise
     function create(bytes32[] memory inputPromises) external returns (bytes32 promiseAllId) {
         require(inputPromises.length > 0, "PromiseAll: empty input array");
-        
+
         // Create a promise for this PromiseAll
         promiseAllId = promiseContract.create();
-        
+
         // Initialize the PromiseAll data
         PromiseAllData storage data = promiseAllData[promiseAllId];
         data.inputPromises = inputPromises;
-        
+
         emit PromiseAllCreated(promiseAllId, inputPromises);
     }
 
@@ -54,18 +54,18 @@ contract PromiseAll is IResolvable {
     /// @return canResolvePromiseAll Whether the PromiseAll can be resolved/rejected now
     function canResolve(bytes32 promiseAllId) external view returns (bool canResolvePromiseAll) {
         PromiseAllData storage data = promiseAllData[promiseAllId];
-        
+
         // Must exist and not be settled yet
         if (data.inputPromises.length == 0) {
             return false;
         }
-        
+
         // Check if the PromiseAll promise itself is still pending
         Promise.PromiseStatus status = promiseContract.status(promiseAllId);
         if (status != Promise.PromiseStatus.Pending) {
             return false;
         }
-        
+
         // Check if any input promise has rejected (fail-fast)
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
             Promise.PromiseStatus inputStatus = promiseContract.status(data.inputPromises[i]);
@@ -73,7 +73,7 @@ contract PromiseAll is IResolvable {
                 return true; // Can resolve (actually reject) immediately
             }
         }
-        
+
         // Check if all input promises have resolved
         uint256 resolvedCount = 0;
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
@@ -82,7 +82,7 @@ contract PromiseAll is IResolvable {
                 resolvedCount++;
             }
         }
-        
+
         return resolvedCount == data.inputPromises.length;
     }
 
@@ -90,28 +90,28 @@ contract PromiseAll is IResolvable {
     /// @param promiseAllId The ID of the PromiseAll promise to resolve
     function resolve(bytes32 promiseAllId) external {
         PromiseAllData storage data = promiseAllData[promiseAllId];
-        
+
         require(data.inputPromises.length > 0, "PromiseAll: promise does not exist");
-        
+
         Promise.PromiseStatus status = promiseContract.status(promiseAllId);
         require(status == Promise.PromiseStatus.Pending, "PromiseAll: promise already settled");
-        
+
         // Check if any input promise has rejected (fail-fast)
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
             Promise.PromiseStatus inputStatus = promiseContract.status(data.inputPromises[i]);
             if (inputStatus == Promise.PromiseStatus.Rejected) {
                 // Reject the PromiseAll with the first rejection found
                 Promise.PromiseData memory promiseData = promiseContract.getPromise(data.inputPromises[i]);
-                
+
                 promiseContract.reject(promiseAllId, promiseData.returnData);
                 emit PromiseAllRejected(promiseAllId, data.inputPromises[i], promiseData.returnData);
-                
+
                 // Clean up storage
                 delete promiseAllData[promiseAllId];
                 return;
             }
         }
-        
+
         // Check if all input promises have resolved
         uint256 resolvedCount = 0;
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
@@ -120,21 +120,21 @@ contract PromiseAll is IResolvable {
                 resolvedCount++;
             }
         }
-        
+
         require(resolvedCount == data.inputPromises.length, "PromiseAll: not all promises resolved yet");
-        
+
         // All promises resolved - collect values and resolve the PromiseAll
         bytes[] memory resolvedValues = new bytes[](data.inputPromises.length);
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
             Promise.PromiseData memory promiseData = promiseContract.getPromise(data.inputPromises[i]);
             resolvedValues[i] = promiseData.returnData;
         }
-        
+
         bytes memory encodedValues = abi.encode(resolvedValues);
-        
+
         promiseContract.resolve(promiseAllId, encodedValues);
         emit PromiseAllResolved(promiseAllId, resolvedValues);
-        
+
         // Clean up storage
         delete promiseAllData[promiseAllId];
     }
@@ -151,9 +151,13 @@ contract PromiseAll is IResolvable {
     /// @return resolvedCount Number of input promises that have resolved
     /// @return totalCount Total number of input promises
     /// @return settled Whether the PromiseAll has been settled
-    function getStatus(bytes32 promiseAllId) external view returns (uint256 resolvedCount, uint256 totalCount, bool settled) {
+    function getStatus(bytes32 promiseAllId)
+        external
+        view
+        returns (uint256 resolvedCount, uint256 totalCount, bool settled)
+    {
         PromiseAllData storage data = promiseAllData[promiseAllId];
-        
+
         // Count currently resolved promises
         resolvedCount = 0;
         for (uint256 i = 0; i < data.inputPromises.length; i++) {
@@ -162,11 +166,11 @@ contract PromiseAll is IResolvable {
                 resolvedCount++;
             }
         }
-        
+
         // Check if PromiseAll itself is settled
         Promise.PromiseStatus promiseAllStatus = promiseContract.status(promiseAllId);
         settled = (promiseAllStatus != Promise.PromiseStatus.Pending);
-        
+
         return (resolvedCount, data.inputPromises.length, settled);
     }
 
@@ -176,4 +180,4 @@ contract PromiseAll is IResolvable {
     function exists(bytes32 promiseAllId) external view returns (bool promiseAllExists) {
         return promiseAllData[promiseAllId].inputPromises.length > 0;
     }
-} 
+}

@@ -32,7 +32,8 @@ contract PromiseHarness {
     /// @return promisesResolved Number of promises resolved
     function resolveAllPending(uint256 maxPromiseId) external returns (uint256 promisesResolved) {
         // First pass: collect all resolvable promises
-        ResolvablePromise[] memory resolvablePromises = new ResolvablePromise[](maxPromiseId * resolvableContracts.length);
+        ResolvablePromise[] memory resolvablePromises =
+            new ResolvablePromise[](maxPromiseId * resolvableContracts.length);
         uint256 resolvableCount = 0;
 
         for (uint256 i = 1; i <= maxPromiseId; i++) {
@@ -41,10 +42,8 @@ contract PromiseHarness {
 
             for (uint256 j = 0; j < resolvableContracts.length; j++) {
                 if (resolvableContracts[j].canResolve(globalPromiseId)) {
-                    resolvablePromises[resolvableCount] = ResolvablePromise({
-                        resolvableContract: resolvableContracts[j],
-                        promiseId: globalPromiseId
-                    });
+                    resolvablePromises[resolvableCount] =
+                        ResolvablePromise({resolvableContract: resolvableContracts[j], promiseId: globalPromiseId});
                     resolvableCount++;
                 }
             }
@@ -80,14 +79,14 @@ contract PromiseHarness {
 
         while (true) {
             uint256 resolved = this.resolveAllPendingAuto();
-            
+
             if (resolved == 0) {
                 break; // No more promises to resolve
             }
-            
+
             totalPromises += resolved;
             layers++;
-            
+
             // Safety check to prevent infinite loops (max 10 layers)
             if (layers >= 10) {
                 break;
@@ -126,13 +125,13 @@ contract PromiseHarness {
     /// @return statuses Array of promise statuses (0=Pending, 1=Resolved, 2=Rejected)
     function getAllPromiseStatuses(uint256 maxPromiseId) external view returns (uint8[] memory statuses) {
         statuses = new uint8[](maxPromiseId);
-        
+
         for (uint256 i = 1; i <= maxPromiseId; i++) {
             bytes32 globalPromiseId = promiseContract.generatePromiseId(bytes32(i));
             if (promiseContract.exists(globalPromiseId)) {
-                statuses[i-1] = uint8(promiseContract.status(globalPromiseId));
+                statuses[i - 1] = uint8(promiseContract.status(globalPromiseId));
             } else {
-                statuses[i-1] = 255; // Non-existent
+                statuses[i - 1] = 255; // Non-existent
             }
         }
     }
@@ -150,4 +149,4 @@ contract PromiseHarness {
         require(index < resolvableContracts.length, "PromiseHarness: index out of bounds");
         return resolvableContracts[index];
     }
-} 
+}

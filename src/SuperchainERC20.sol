@@ -2,16 +2,16 @@
 pragma solidity ^0.8.25;
 
 // Contracts
-import { ERC20 } from "@solady-v0.0.245/tokens/ERC20.sol";
+import {ERC20} from "@solady-v0.0.245/tokens/ERC20.sol";
 
 // Libraries
-import { PredeployAddresses } from "./libraries/PredeployAddresses.sol";
-import { Unauthorized } from "./libraries/errors/CommonErrors.sol";
+import {PredeployAddresses} from "./libraries/PredeployAddresses.sol";
+import {Unauthorized} from "./libraries/errors/CommonErrors.sol";
 
 // Interfaces
-import { IERC20 } from "@openzeppelin-contracts/interfaces/IERC20.sol";
-import { ISemver } from "./interfaces/ISemver.sol";
-import { IERC7802, IERC165 } from "./interfaces/IERC7802.sol";
+import {IERC20} from "@openzeppelin-contracts/interfaces/IERC20.sol";
+import {ISemver} from "./interfaces/ISemver.sol";
+import {IERC7802, IERC165} from "./interfaces/IERC7802.sol";
 
 /// @title SuperchainERC20
 /// @notice A standard ERC20 extension implementing IERC7802 for unified cross-chain fungibility

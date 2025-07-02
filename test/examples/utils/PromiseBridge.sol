@@ -13,21 +13,21 @@ import {MockSuperchainERC20} from "./MockSuperchainERC20.sol";
 contract PromiseBridge {
     /// @notice Promise contract instance
     Promise public immutable promiseContract;
-    
+
     /// @notice Callback contract instance
     Callback public immutable callbackContract;
-    
+
     /// @notice Current chain ID
     uint256 public immutable currentChainId;
 
     /// @notice Bridge operation data
     struct BridgeOperation {
-        address token;           // Token being bridged
-        address user;           // User initiating the bridge
-        uint256 amount;         // Amount being bridged
+        address token; // Token being bridged
+        address user; // User initiating the bridge
+        uint256 amount; // Amount being bridged
         uint256 destinationChain; // Destination chain ID
-        address recipient;      // Recipient on destination chain
-        bool completed;         // Whether the operation completed
+        address recipient; // Recipient on destination chain
+        bool completed; // Whether the operation completed
     }
 
     /// @notice Mapping from promise ID to bridge operation data
@@ -45,22 +45,15 @@ contract PromiseBridge {
 
     /// @notice Event emitted when tokens are minted on destination chain
     event TokensMinted(
-        address indexed token,
-        address indexed recipient,
-        uint256 amount,
-        uint256 indexed sourceChain,
-        bytes32 promiseId
+        address indexed token, address indexed recipient, uint256 amount, uint256 indexed sourceChain, bytes32 promiseId
     );
 
     /// @notice Event emitted when bridge operation completes
-    event BridgeCompleted(
-        bytes32 indexed promiseId,
-        bool success
-    );
+    event BridgeCompleted(bytes32 indexed promiseId, bool success);
 
     /// @notice Error thrown for invalid bridge operations
     error InvalidBridgeOperation(string reason);
-    
+
     /// @notice Error thrown for unauthorized calls
     error Unauthorized();
 
@@ -80,24 +73,22 @@ contract PromiseBridge {
     /// @param recipient Recipient address on destination chain
     /// @return promiseId Promise ID that will resolve when bridge completes
     /// @return callbackPromiseId Callback promise ID for cross-chain minting
-    function bridgeTokens(
-        address token,
-        uint256 amount,
-        uint256 destinationChain,
-        address recipient
-    ) external returns (bytes32 promiseId, bytes32 callbackPromiseId) {
+    function bridgeTokens(address token, uint256 amount, uint256 destinationChain, address recipient)
+        external
+        returns (bytes32 promiseId, bytes32 callbackPromiseId)
+    {
         require(destinationChain != currentChainId, "Cannot bridge to same chain");
         require(amount > 0, "Amount must be greater than zero");
         require(recipient != address(0), "Invalid recipient");
-        
+
         // Check that token supports crosschain operations
         if (!IERC7802(token).supportsInterface(type(IERC7802).interfaceId)) {
             revert InvalidBridgeOperation("Token does not support cross-chain operations");
         }
-        
+
         // Create a promise for this bridge operation
         promiseId = promiseContract.create();
-        
+
         // Store bridge operation data
         bridgeOperations[promiseId] = BridgeOperation({
             token: token,
@@ -107,28 +98,24 @@ contract PromiseBridge {
             recipient: recipient,
             completed: false
         });
-        
+
         // Burn tokens on this chain
         IERC20(token).transferFrom(msg.sender, address(this), amount);
         IERC7802(token).crosschainBurn(address(this), amount);
-        
+
         emit TokensBurned(token, msg.sender, amount, destinationChain, recipient, promiseId);
-        
+
         // Register cross-chain callback to mint tokens on destination
-        callbackPromiseId = callbackContract.thenOn(
-            destinationChain,
-            promiseId,
-            address(this),
-            this.mintTokensCallback.selector
-        );
-        
+        callbackPromiseId =
+            callbackContract.thenOn(destinationChain, promiseId, address(this), this.mintTokensCallback.selector);
+
         // Auto-resolve the promise to trigger the minting callback
         // In a real implementation, this might wait for block confirmations
         promiseContract.resolve(promiseId, abi.encode(token, recipient, amount, currentChainId));
-        
+
         // CRITICAL: Share the resolved promise to the destination chain so the callback can access it
         promiseContract.shareResolvedPromise(destinationChain, promiseId);
-        
+
         return (promiseId, callbackPromiseId);
     }
 
@@ -138,15 +125,15 @@ contract PromiseBridge {
     function mintTokensCallback(bytes memory bridgeData) external returns (bool success) {
         // Verify this is called by the callback contract
         require(msg.sender == address(callbackContract), "Only callback contract can call");
-        
+
         // Decode bridge data
-        (address token, address recipient, uint256 amount, uint256 sourceChain) = 
+        (address token, address recipient, uint256 amount, uint256 sourceChain) =
             abi.decode(bridgeData, (address, address, uint256, uint256));
-        
+
         // First check if this bridge is the authorized minter
         address authorizedMinter = MockSuperchainERC20(token).authorizedMinter();
         require(authorizedMinter == address(this), "Bridge must be authorized minter");
-        
+
         try IERC7802(token).crosschainMint(recipient, amount) {
             emit TokensMinted(token, recipient, amount, sourceChain, 0); // Promise ID not available in callback
             success = true;
@@ -154,10 +141,10 @@ contract PromiseBridge {
             emit TokensMinted(token, recipient, 0, sourceChain, 0); // Emit failed mint for debugging
             success = false;
         } catch {
-            emit TokensMinted(token, recipient, 0, sourceChain, 0); // Emit failed mint for debugging  
+            emit TokensMinted(token, recipient, 0, sourceChain, 0); // Emit failed mint for debugging
             success = false;
         }
-        
+
         return success;
     }
 
@@ -182,17 +169,17 @@ contract PromiseBridge {
         BridgeOperation storage operation = bridgeOperations[promiseId];
         require(operation.user == msg.sender, "Only bridge initiator can rollback");
         require(!operation.completed, "Bridge already completed");
-        
+
         // Check if the promise was rejected (indicating failure)
         Promise.PromiseStatus status = promiseContract.status(promiseId);
         require(status == Promise.PromiseStatus.Rejected, "Can only rollback rejected bridges");
-        
+
         // Mint back the tokens on the source chain
         IERC7802(operation.token).crosschainMint(operation.user, operation.amount);
-        
+
         // Mark as completed to prevent double rollback
         operation.completed = true;
-        
+
         emit BridgeCompleted(promiseId, false);
     }
 
@@ -203,25 +190,19 @@ contract PromiseBridge {
     /// @param recipient Recipient address on destination chain
     /// @return bridgePromiseId Promise ID for the bridge operation
     /// @return rollbackPromiseId Promise ID for potential rollback operation
-    function bridgeWithRollback(
-        address token,
-        uint256 amount,
-        uint256 destinationChain,
-        address recipient
-    ) external returns (bytes32 bridgePromiseId, bytes32 rollbackPromiseId) {
+    function bridgeWithRollback(address token, uint256 amount, uint256 destinationChain, address recipient)
+        external
+        returns (bytes32 bridgePromiseId, bytes32 rollbackPromiseId)
+    {
         // Execute normal bridge
-        (bridgePromiseId, ) = this.bridgeTokens(token, amount, destinationChain, recipient);
-        
+        (bridgePromiseId,) = this.bridgeTokens(token, amount, destinationChain, recipient);
+
         // Create rollback promise that triggers if bridge fails
         rollbackPromiseId = promiseContract.create();
-        
+
         // Register rollback callback for rejection case
-        callbackContract.catchError(
-            bridgePromiseId,
-            address(this),
-            this.executeRollback.selector
-        );
-        
+        callbackContract.catchError(bridgePromiseId, address(this), this.executeRollback.selector);
+
         return (bridgePromiseId, rollbackPromiseId);
     }
 
@@ -241,4 +222,4 @@ contract PromiseBridge {
     function emergencyWithdraw(address token, uint256 amount) external {
         IERC20(token).transfer(msg.sender, amount);
     }
-} 
+}

@@ -29,16 +29,16 @@ contract SetTimeout is IResolvable {
     /// @return promiseId The ID of the created promise
     function create(uint256 secondsInFuture) external returns (bytes32 promiseId) {
         // Allow 0 seconds for immediate resolution
-        
+
         // Calculate the absolute timestamp
         uint256 targetTimestamp = block.timestamp + secondsInFuture;
-        
+
         // Create a promise via the Promise contract
         promiseId = promiseContract.create();
-        
+
         // Store the timeout mapping
         timeouts[promiseId] = targetTimestamp;
-        
+
         emit TimeoutCreated(promiseId, targetTimestamp);
     }
 
@@ -48,17 +48,17 @@ contract SetTimeout is IResolvable {
         uint256 targetTimestamp = timeouts[promiseId];
         require(targetTimestamp != 0, "SetTimeout: promise does not exist");
         require(block.timestamp >= targetTimestamp, "SetTimeout: timeout not reached");
-        
+
         // Check that the promise is still pending
         Promise.PromiseStatus status = promiseContract.status(promiseId);
         require(status == Promise.PromiseStatus.Pending, "SetTimeout: promise already settled");
-        
+
         // Resolve the promise with empty data (timeouts don't return values)
         promiseContract.resolve(promiseId, "");
-        
+
         // Clean up storage
         delete timeouts[promiseId];
-        
+
         emit TimeoutResolved(promiseId, targetTimestamp);
     }
 
@@ -68,10 +68,10 @@ contract SetTimeout is IResolvable {
     function canResolve(bytes32 promiseId) external view returns (bool canResolveTimeout) {
         uint256 targetTimestamp = timeouts[promiseId];
         if (targetTimestamp == 0) return false;
-        
+
         Promise.PromiseStatus status = promiseContract.status(promiseId);
         if (status != Promise.PromiseStatus.Pending) return false;
-        
+
         return block.timestamp >= targetTimestamp;
     }
 
@@ -88,11 +88,11 @@ contract SetTimeout is IResolvable {
     function getRemainingTime(bytes32 promiseId) external view returns (uint256 remainingTime) {
         uint256 targetTimestamp = timeouts[promiseId];
         if (targetTimestamp == 0) return 0;
-        
+
         if (block.timestamp >= targetTimestamp) {
             return 0;
         } else {
             return targetTimestamp - block.timestamp;
         }
     }
-} 
+}

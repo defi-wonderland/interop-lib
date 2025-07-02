@@ -12,4 +12,4 @@ interface IResolvable {
     /// @notice Resolve a promise managed by this contract
     /// @param promiseId The ID of the promise to resolve
     function resolve(bytes32 promiseId) external;
-} 
+}

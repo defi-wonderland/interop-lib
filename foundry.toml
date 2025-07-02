@@ -11,4 +11,9 @@ remappings = [
 # 5159 error code is selfdestruct error code
 ignored_error_codes = ["transient-storage",5159]
 
+# supersim rpcs
+[rpc_endpoints]
+l2a = "http://127.0.0.1:9545"
+l2b = "http://127.0.0.1:9546"
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
