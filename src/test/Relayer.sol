@@ -142,14 +142,13 @@ abstract contract Relayer is CommonBase {
             bytes memory payload = constructMessagePayload(log);
 
             // Build access list
-            bytes32[] memory slots = new bytes32[](2);
+            bytes32[] memory storageKeys = new bytes32[](2);
             // Storage key 0: idPacked
-            slots[0] =
-                bytes32(abi.encodePacked(uint96(0), uint64(id.blockNumber), uint64(id.timestamp), uint32(id.logIndex)));
+            storageKeys[0] = CrossDomainMessageLib.packIdentifier(id);
             // Storage key 1: checksum
-            slots[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            storageKeys[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
             VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
-            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: slots});
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: storageKeys});
 
             // Relay message
             vm.accessList(accessList);
@@ -210,14 +209,13 @@ abstract contract Relayer is CommonBase {
             Identifier memory id = Identifier(log.emitter, block.number, 0, block.timestamp, sourceChainId);
 
             // Build access list
-            bytes32[] memory slots = new bytes32[](2);
+            bytes32[] memory storageKeys = new bytes32[](2);
             // Storage key 0: idPacked
-            slots[0] =
-                bytes32(abi.encodePacked(uint96(0), uint64(id.blockNumber), uint64(id.timestamp), uint32(id.logIndex)));
+            storageKeys[0] = CrossDomainMessageLib.packIdentifier(id);
             // Storage key 1: checksum
-            slots[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            storageKeys[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
             VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
-            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: slots});
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: storageKeys});
 
             vm.accessList(accessList);
             p.dispatchCallbacks(id, payload);
