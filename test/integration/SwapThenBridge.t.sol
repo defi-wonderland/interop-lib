@@ -138,6 +138,64 @@ contract SwapThenBridgeTest is Relayer, Test {
         vm.stopPrank();
     }
 
+    /// @notice Test promise-based rollback of tokens to chain A when workflow fails
+    function test_promiseRollback_bridgedTokens() public {
+        vm.selectFork(forkIds[0]);
+
+        console2.log("=== Testing Promise-Based Rollback of bridged tokens ===");
+
+        // Create a workflow promise
+        bytes32 workflowPromiseId = promiseA.create();
+
+        // Set up failure detection callback that triggers rollback on chain B
+        bytes32 localRollbackCallbackId = callbackA.catchErrorOn(
+            chainIdByForkId[forkIds[1]],
+            workflowPromiseId,
+            address(callbackHandler),
+            CallbackHandler.handleRollback.selector
+        );
+
+        vm.startPrank(user);
+
+        // Execute the initial operations
+        token1.approve(address(exchangeA), 100 ether);
+        uint256 token2Amount = exchangeA.swap(address(token1), address(token2), 100 ether);
+
+        // Bridge token2 to chain B
+        ISuperchainTokenBridge(SUPERCHAIN_TOKEN_BRIDGE).sendERC20(
+            address(token2), user, token2Amount, chainIdByForkId[forkIds[1]]
+        );
+
+        // Verify token2 balance on chain A
+        assertEq(token2.balanceOf(user), initialToken2BalanceA);
+
+        vm.stopPrank();
+
+        // Reject the workflow promise and notify chain B
+        promiseA.reject(
+            workflowPromiseId, abi.encode(chainIdByForkId[forkIds[0]], address(token2), user, user, token2Amount)
+        );
+
+        // Share the resolution to chain B
+        promiseA.shareResolvedPromise(chainIdByForkId[forkIds[1]], workflowPromiseId);
+
+        vm.selectFork(forkIds[1]);
+        relayAllMessages();
+
+        // Approve token2 for handler to rollback
+        vm.prank(user);
+        token2.approve(address(callbackHandler), token2Amount);
+
+        // Execute the rollback callback
+        if (callbackA.canResolve(localRollbackCallbackId)) {
+            callbackA.resolve(localRollbackCallbackId);
+        }
+
+        vm.selectFork(forkIds[0]);
+        relayAllMessages();
+        assertEq(token2.balanceOf(user), initialToken2BalanceA + token2Amount);
+    }
+
     function _rpcUrls() internal view returns (string[] memory rpcs_) {
         rpcs_ = new string[](2);
         rpcs_[0] = vm.rpcUrl("op_mainnet");
@@ -264,5 +322,24 @@ contract CallbackHandler {
         tokenIn_ = bridgeToken;
         tokenOut_ = otherToken;
         amount_ = amount;
+    }
+
+    /// @notice Callback function for automatic rollback execution
+    /// @param errorData Error data from failed workflow
+    /// @return success Whether rollback was successful
+    function handleRollback(bytes memory errorData) external returns (bool success) {
+        (uint256 destinationId, address token, address sender, address recipient, uint256 amount) =
+            abi.decode(errorData, (uint256, address, address, address, uint256));
+
+        console2.log("Failure occurred during cross-chain workflow returning bridged token");
+        console2.log("Token: ", token);
+        console2.log("Recipient: ", recipient);
+        console2.log("Amount: ", amount);
+        console2.log("Destination ID: ", destinationId);
+
+        MockSuperchainERC20(token).transferFrom(sender, address(this), amount);
+        superchainTokenBridge.sendERC20(token, recipient, amount, destinationId);
+
+        return true;
     }
 }
