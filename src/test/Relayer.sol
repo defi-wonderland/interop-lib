@@ -12,11 +12,6 @@ import {IPromise} from "../interfaces/IPromise.sol";
 import {PredeployAddresses} from "../libraries/PredeployAddresses.sol";
 import {CrossDomainMessageLib} from "../libraries/CrossDomainMessageLib.sol";
 
-struct RelayedMessage {
-    Identifier id;
-    bytes payload;
-}
-
 /**
  * @title Relayer
  * @notice Abstract contract that simulates cross-chain message relaying between L2 chains
@@ -25,6 +20,11 @@ struct RelayedMessage {
  *      It captures SentMessage events using vm.recordLogs() and vm.getRecordedLogs() and relays them to their destination chains.
  */
 abstract contract Relayer is CommonBase {
+    struct RelayedMessage {
+        Identifier id;
+        bytes payload;
+    }
+
     /// @notice Reference to the L2ToL2CrossDomainMessenger contract
     IL2ToL2CrossDomainMessenger messenger =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
