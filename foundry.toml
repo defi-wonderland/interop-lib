@@ -12,3 +12,7 @@ remappings = [
 ignored_error_codes = ["transient-storage",5159]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[rpc_endpoints]
+base="${BASE_RPC}"
+op_mainnet="${OP_MAINNET_RPC}"
