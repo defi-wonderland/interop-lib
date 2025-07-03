@@ -52,6 +52,7 @@ contract ERC20ReferenceTest is StdUtils, Test, Relayer {
         deployer.deploy(0, salt, remoteERC20CreationCode);
     }
 
+    /// forge-config: default.isolate = true
     function test_approve() public {
         vm.assume(spender != address(this));
 
@@ -77,6 +78,7 @@ contract ERC20ReferenceTest is StdUtils, Test, Relayer {
         vm.stopPrank();
     }
 
+    /// forge-config: default.isolate = true
     function test_transferFrom() public {
         vm.assume(spender != address(this));
 
@@ -94,6 +96,7 @@ contract ERC20ReferenceTest is StdUtils, Test, Relayer {
         assertEq(remoteERC20.allowance(address(this), spender), 0);
     }
 
+    /// forge-config: default.isolate = true
     function test_transfer() public {
         test_transferFrom();
 

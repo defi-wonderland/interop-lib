@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Vm} from "forge-std/Vm.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 import {CommonBase} from "forge-std/Base.sol";
 
 import {IL2ToL2CrossDomainMessenger, Identifier} from "../interfaces/IL2ToL2CrossDomainMessenger.sol";
+import {ICrossL2Inbox} from "../interfaces/ICrossL2Inbox.sol";
 import {IMessageRelayer} from "../interfaces/IMessageRelayer.sol";
 import {IPromise} from "../interfaces/IPromise.sol";
 
@@ -27,6 +28,9 @@ abstract contract Relayer is CommonBase {
     /// @notice Reference to the L2ToL2CrossDomainMessenger contract
     IL2ToL2CrossDomainMessenger messenger =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
+
+    /// @notice Reference to the CrossL2Inbox contract
+    ICrossL2Inbox crossL2Inbox = ICrossL2Inbox(PredeployAddresses.CROSS_L2_INBOX);
 
     /// @notice Array of fork IDs
     uint256[] public forkIds;
@@ -137,11 +141,18 @@ abstract contract Relayer is CommonBase {
             Identifier memory id = Identifier(log.emitter, block.number, i, block.timestamp, sourceChainId);
             bytes memory payload = constructMessagePayload(log);
 
-            // Warm slot
-            bytes32 slot = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
-            vm.load(PredeployAddresses.CROSS_L2_INBOX, slot);
+            // Build access list
+            bytes32[] memory slots = new bytes32[](2);
+            // Storage key 0: idPacked
+            slots[0] =
+                bytes32(abi.encodePacked(uint96(0), uint64(id.blockNumber), uint64(id.timestamp), uint32(id.logIndex)));
+            // Storage key 1: checksum
+            slots[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: slots});
 
             // Relay message
+            vm.accessList(accessList);
             IMessageRelayer(messageRelayer).relayMessage(id, payload);
 
             // Add to messages array (using index assignment instead of push)
@@ -198,10 +209,17 @@ abstract contract Relayer is CommonBase {
             bytes memory payload = constructMessagePayload(log);
             Identifier memory id = Identifier(log.emitter, block.number, 0, block.timestamp, sourceChainId);
 
-            // Warm slot
-            bytes32 slot = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
-            vm.load(PredeployAddresses.CROSS_L2_INBOX, slot);
+            // Build access list
+            bytes32[] memory slots = new bytes32[](2);
+            // Storage key 0: idPacked
+            slots[0] =
+                bytes32(abi.encodePacked(uint96(0), uint64(id.blockNumber), uint64(id.timestamp), uint32(id.logIndex)));
+            // Storage key 1: checksum
+            slots[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: slots});
 
+            vm.accessList(accessList);
             p.dispatchCallbacks(id, payload);
 
             // Add to messages array (using index assignment instead of push)
