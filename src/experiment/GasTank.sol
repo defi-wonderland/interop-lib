@@ -6,6 +6,7 @@ import {ICrossL2Inbox} from "../interfaces/ICrossL2Inbox.sol";
 import {IGasTank} from "./IGasTank.sol";
 import {IL2ToL2CrossDomainMessenger} from "../interfaces/IL2ToL2CrossDomainMessenger.sol";
 import {Identifier} from "../interfaces/IIdentifier.sol";
+import {IGasPriceOracle} from "../interfaces/IGasPriceOracle.sol";
 
 // Libraries
 import {Encoding} from "../libraries/Encoding.sol";
@@ -18,15 +19,15 @@ import {SafeSend} from "../universal/SafeSend.sol";
 contract GasTank is IGasTank {
     using Encoding for uint256;
 
-    /// @notice The maximum amount of funds that can be deposited into the gas tank
-    uint256 public constant MAX_DEPOSIT = 0.01 ether;
-
     /// @notice The delay before a withdrawal can be finalized
     uint256 public constant WITHDRAWAL_DELAY = 7 days;
 
     /// @notice The cross domain messenger
     IL2ToL2CrossDomainMessenger public constant MESSENGER =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
+
+    /// @notice The gas price oracle for L1 cost calculations
+    IGasPriceOracle public constant GAS_PRICE_ORACLE = IGasPriceOracle(PredeployAddresses.GAS_PRICE_ORACLE);
 
     /// @notice The balance of each gas provider
     mapping(address gasProvider => uint256 balance) public balanceOf;
@@ -37,24 +38,18 @@ contract GasTank is IGasTank {
     /// @notice The authorized messages for claiming
     mapping(address gasProvider => mapping(bytes32 messageHash => bool authorized)) public authorizedMessages;
 
-    /// @notice The claimed messages
-    mapping(bytes32 messageHash => bool claimed) public claimed;
-
     /// @notice Deposits funds into the gas tank, from which the relayer can claim the repayment after relaying
     /// @param _to The address to deposit the funds to
     function deposit(address _to) external payable {
-        uint256 newBalance = balanceOf[_to] + msg.value;
+        balanceOf[_to] += msg.value;
 
-        if (newBalance > MAX_DEPOSIT) revert MaxDepositExceeded();
-
-        balanceOf[_to] = newBalance;
         emit Deposit(_to, msg.value);
     }
 
     /// @notice Initiates a withdrawal of funds from the gas tank
     /// @param _amount The amount of funds to initiate a withdrawal for
     function initiateWithdrawal(uint256 _amount) external {
-        withdrawals[msg.sender] = Withdrawal({ timestamp: block.timestamp, amount: _amount });
+        withdrawals[msg.sender] = Withdrawal({timestamp: block.timestamp, amount: _amount});
 
         emit WithdrawalInitiated(msg.sender, _amount);
     }
@@ -72,18 +67,19 @@ contract GasTank is IGasTank {
 
         delete withdrawals[msg.sender];
 
-        new SafeSend{ value: amount }(payable(_to));
+        new SafeSend{value: amount}(payable(_to));
 
         emit WithdrawalFinalized(msg.sender, _to, amount);
     }
 
     /// @notice Authorizes a message to be claimed by the relayer
-    /// @param _messageHash The hash of the message to authorize
-    function authorizeClaim(bytes32 _messageHash) external {
-        authorizedMessages[msg.sender][_messageHash] = true;
+    /// @param _messageHashes The hashes of the messages to authorize
+    function authorizeClaim(bytes32[] calldata _messageHashes) external {
+        uint256 messageHashesLength = _messageHashes.length;
 
-        bytes32[] memory _messageHashes = new bytes32[](1);
-        _messageHashes[0] = _messageHash;
+        for (uint256 i; i < messageHashesLength; i++) {
+            authorizedMessages[msg.sender][_messageHashes[i]] = true;
+        }
 
         emit AuthorizedClaims(msg.sender, _messageHashes);
     }
@@ -91,10 +87,7 @@ contract GasTank is IGasTank {
     /// @notice Relays a message to the destination chain
     /// @param _id The identifier of the message
     /// @param _sentMessage The sent message event payload
-    function relayMessage(
-        Identifier calldata _id,
-        bytes calldata _sentMessage
-    )
+    function relayMessage(Identifier calldata _id, bytes calldata _sentMessage)
         external
         returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_)
     {
@@ -116,9 +109,9 @@ contract GasTank is IGasTank {
         }
 
         // Get the gas used
-        relayCost_ = _cost(initialGas - gasleft(), block.basefee) + _relayOverhead(nestedMessageHashes_.length);
+        relayCost_ = _cost(initialGas - gasleft(), block.basefee) + _relayOverhead(nestedMessageHashes_.length)
+            + GAS_PRICE_ORACLE.getL1Fee(msg.data);
 
-        // Emit the event with the relationship between the origin message and the destination messages
         emit RelayedMessageGasReceipt(messageHash, msg.sender, relayCost_, nestedMessageHashes_);
     }
 
@@ -138,30 +131,27 @@ contract GasTank is IGasTank {
 
         if (!authorizedMessages[_gasProvider][messageHash]) revert MessageNotAuthorized();
 
-        if (claimed[messageHash]) revert AlreadyClaimed();
-
         uint256 nestedMessageHashesLength = nestedMessageHashes.length;
 
-        // Authorize nested messages by the same gas provider
-        for (uint256 i; i < nestedMessageHashesLength; i++) {
-            authorizedMessages[_gasProvider][nestedMessageHashes[i]] = true;
+        if (nestedMessageHashesLength != 0) {
+            for (uint256 i; i < nestedMessageHashesLength; i++) {
+                authorizedMessages[_gasProvider][nestedMessageHashes[i]] = true;
+            }
+            emit AuthorizedClaims(_gasProvider, nestedMessageHashes);
         }
-
-        if (nestedMessageHashesLength != 0) emit AuthorizedClaims(_gasProvider, nestedMessageHashes);
 
         if (balanceOf[_gasProvider] < relayCost) revert InsufficientBalance();
 
-        balanceOf[_gasProvider] -= relayCost;
+        uint256 claimCost =
+            _min(balanceOf[_gasProvider], claimOverhead(nestedMessageHashesLength, block.basefee, msg.data));
 
-        uint256 claimCost = _min(balanceOf[_gasProvider], claimOverhead(nestedMessageHashesLength, block.basefee));
+        balanceOf[_gasProvider] -= relayCost + claimCost;
 
-        balanceOf[_gasProvider] -= claimCost;
+        delete authorizedMessages[_gasProvider][messageHash];
 
-        claimed[messageHash] = true;
+        new SafeSend{value: relayCost}(payable(relayer));
 
-        new SafeSend{ value: relayCost }(payable(relayer));
-
-        new SafeSend{ value: claimCost }(payable(msg.sender));
+        new SafeSend{value: claimCost}(payable(msg.sender));
 
         emit Claimed(messageHash, relayer, _gasProvider, msg.sender, relayCost, claimCost);
     }
@@ -189,17 +179,37 @@ contract GasTank is IGasTank {
     /// @notice Calculates the overhead of a claim
     /// @param _numHashes The number of destination hashes relayed
     /// @param _baseFee The base fee of the block
+    /// @param _data The data of the transaction
     /// @return overhead_ The overhead cost of the claim transaction in wei
-    function claimOverhead(uint256 _numHashes, uint256 _baseFee) public pure returns (uint256 overhead_) {
-        overhead_ = _cost(151_800 + _numHashes * 23_000, _baseFee);
+    function claimOverhead(uint256 _numHashes, uint256 _baseFee, bytes calldata _data)
+        public
+        view
+        returns (uint256 overhead_)
+    {
+        uint256 dynamicCost;
+        uint256 fixedCost;
+
+        if (_numHashes == 0) {
+            fixedCost = 274_000;
+        } else if (_numHashes == 1) {
+            fixedCost = 304_600;
+        } else {
+            fixedCost = 249_000;
+            dynamicCost = 34_800 * _numHashes;
+            dynamicCost += (_numHashes * _numHashes) >> 12;
+        }
+
+        // Calculate L2 and L1 costs separately
+        overhead_ = _cost(fixedCost + dynamicCost, _baseFee) + GAS_PRICE_ORACLE.getL1Fee(_data);
     }
 
     /// @notice Calculates the overhead to emit RelayedMessageGasReceipt
     /// @param _numHashes The number of destination hashes relayed
     /// @return overhead_ The gas cost to emit the event in wei
     function _relayOverhead(uint256 _numHashes) internal view returns (uint256 overhead_) {
-        uint256 memoryExpansionGas = (418 * _numHashes) + ((_numHashes * _numHashes) >> 9);
-        overhead_ = _cost(34_245 + memoryExpansionGas, block.basefee);
+        uint256 dynamicCost = 417 * _numHashes;
+        uint256 fixedCost = 34_300;
+        overhead_ = _cost(fixedCost + dynamicCost, block.basefee);
     }
 
     /// @notice Calculates the cost of gas used in wei
@@ -222,10 +232,7 @@ contract GasTank is IGasTank {
     /// @param _source The source chain ID
     /// @param _sentMessage The sent message
     /// @return messageHash_ The hash of the message
-    function _getMessageHash(
-        uint256 _source,
-        bytes calldata _sentMessage
-    )
+    function _getMessageHash(uint256 _source, bytes calldata _sentMessage)
         internal
         pure
         returns (bytes32 messageHash_)
