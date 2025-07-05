@@ -48,12 +48,10 @@ contract GasTankTest is StdUtils, Test, Relayer {
         vm.selectFork(chainA);
         gasTank901 = new GasTank{salt: salt}();
         messageSender901 = new MessageSender{salt: salt}();
-        vm.deal(gasProvider, 100 ether);
 
         vm.selectFork(chainB);
         gasTank902 = new GasTank{salt: salt}();
         messageSender902 = new MessageSender{salt: salt}();
-        vm.deal(gasProvider, 100 ether);
     }
 
     /// forge-config: default.isolate = true
@@ -117,7 +115,8 @@ contract GasTankTest is StdUtils, Test, Relayer {
         (bytes memory relayPayload, uint256 logIndex) = _getGasReceiptPayload();
 
         vm.selectFork(chainA);
-        // Claim repayment for the message relay
+        // 5. Relayer claims repayment for the message relay
+        // relayCost & claimCost transferred to the relayer
         vm.startPrank(relayer);
         _claim(relayPayload, logIndex);
         vm.stopPrank();
