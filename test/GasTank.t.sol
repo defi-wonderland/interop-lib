@@ -13,6 +13,7 @@ import {IGasTank, GasTank} from "../src/experiment/GasTank.sol";
 import {MessageSender} from "../src/experiment/MessageSender.sol";
 import {Identifier} from "../src/interfaces/IIdentifier.sol";
 import {IL2ToL2CrossDomainMessenger} from "../src/interfaces/IL2ToL2CrossDomainMessenger.sol";
+import {CrossDomainMessageLib} from "../src/libraries/CrossDomainMessageLib.sol";
 
 contract GasTankTest is StdUtils, Test, Relayer {
     GasTank public gasTank901;
@@ -104,11 +105,59 @@ contract GasTankTest is StdUtils, Test, Relayer {
 
         logs[0] = VmSafe.Log({topics: topics, data: abi.encode(user, message), emitter: address(messenger)});
 
-        vm.prank(relayer);
+        vm.startPrank(relayer);
         // vm.expectEmit(address(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER));
         // emit IL2ToL2CrossDomainMessenger.RelayedMessage(
         //     chainIdByForkId[chainA], _nonce, messageHashes[0], keccak256("")
         // );
         relayMessagesWith(address(gasTank902), logs, chainIdByForkId[chainA]);
+        vm.stopPrank();
+
+        // Capture the RelayedMessageGasReceipt event payload
+        (bytes memory relayPayload, uint256 logIndex) = _getGasReceiptPayload();
+
+        vm.selectFork(chainA);
+        // Claim repayment for the message relay
+        vm.startPrank(relayer);
+        _claim(relayPayload, logIndex);
+        vm.stopPrank();
+        assertTrue(gasTank901.claimed(messageHashes[0]), "Message should be marked as claimed");
+    }
+
+    function _claim(bytes memory relayPayload, uint256 logIndex) internal {
+        // 5. Execute claim with the original message hash (already authorized)
+        Identifier memory claimId = Identifier({
+            origin: address(gasTank902),
+            blockNumber: block.number,
+            logIndex: logIndex,
+            timestamp: block.timestamp,
+            chainId: chainIdByForkId[chainB]
+        });
+
+        // Build access list
+        bytes32[] memory storageKeys = new bytes32[](2);
+        // Storage key 0: idPacked
+        storageKeys[0] = CrossDomainMessageLib.packIdentifier(claimId);
+        // Storage key 1: checksum
+        storageKeys[1] = CrossDomainMessageLib.calculateChecksum(claimId, keccak256(relayPayload));
+        VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
+        accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: storageKeys});
+
+        vm.accessList(accessList);
+        gasTank901.claim(claimId, user, relayPayload);
+    }
+
+    function _getGasReceiptPayload() internal returns (bytes memory payload_, uint256 logIndex_) {
+        VmSafe.Log[] memory relayLogs = vm.getRecordedLogs();
+        bytes32 selector = IGasTank.RelayedMessageGasReceipt.selector;
+
+        for (uint256 i = 0; i < relayLogs.length; i++) {
+            if (relayLogs[i].topics[0] == selector) {
+                payload_ = constructMessagePayload(relayLogs[i]);
+                logIndex_ = i;
+                return (payload_, logIndex_);
+            }
+        }
+        revert("RelayedMessageGasReceipt event not found");
     }
 }
