@@ -67,14 +67,18 @@ contract GasTankTest is StdUtils, Test, Relayer {
         uint256 _nonce = messenger.messageNonce();
 
         vm.expectEmit();
-        emit IL2ToL2CrossDomainMessenger.SentMessage(chainB, address(messageSender902), _nonce, user, message);
+        emit IL2ToL2CrossDomainMessenger.SentMessage(
+            chainIdByForkId[chainB], address(messageSender902), _nonce, user, message
+        );
         vm.prank(user);
-        messageHashes[0] = messenger.sendMessage(chainB, address(messageSender902), message);
+        messageHashes[0] = messenger.sendMessage(chainIdByForkId[chainB], address(messageSender902), message);
 
         // 2. User authorizes to claim reimbursement for this message on the origin chain
         vm.expectEmit(address(gasTank901));
-        emit IGasTank.AuthorizedClaims(address(this), messageHashes);
+        emit IGasTank.AuthorizedClaims(user, messageHashes);
+        vm.prank(user);
         gasTank901.authorizeClaim(messageHashes[0]);
+        assertTrue(gasTank901.authorizedMessages(user, messageHashes[0]));
 
         // 3. Fund the GasTank up to the maximum deposit for the deployer/gas provider account
         uint256 currentBalance = gasTank901.balanceOf(gasProvider);
@@ -101,6 +105,10 @@ contract GasTankTest is StdUtils, Test, Relayer {
         logs[0] = VmSafe.Log({topics: topics, data: abi.encode(user, message), emitter: address(messenger)});
 
         vm.prank(relayer);
-        relayMessagesWith(address(gasTank902), logs, chainA);
+        // vm.expectEmit(address(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER));
+        // emit IL2ToL2CrossDomainMessenger.RelayedMessage(
+        //     chainIdByForkId[chainA], _nonce, messageHashes[0], keccak256("")
+        // );
+        relayMessagesWith(address(gasTank902), logs, chainIdByForkId[chainA]);
     }
 }
