@@ -54,7 +54,6 @@ contract GasTankTest is StdUtils, Test, Relayer {
         messageSender902 = new MessageSender{salt: salt}();
     }
 
-    /// forge-config: default.isolate = true
     function test_gasTankRelay() public {
         vm.selectFork(chainA);
 

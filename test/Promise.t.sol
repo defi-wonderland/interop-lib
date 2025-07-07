@@ -43,7 +43,6 @@ contract PromiseTest is Relayer, Test {
         _;
     }
 
-    /// forge-config: default.isolate = true
     function test_then_succeeds() public {
         vm.selectFork(forkIds[0]);
 

@@ -2,13 +2,14 @@
 src = "src"
 out = "out"
 libs = ["contracts/lib"]
+isolate = true
 
 remappings = [
   "@openzeppelin-contracts/=vendor/openzeppelin-contracts/",
-  '@solady-v0.0.245/=vendor/solady-v0.0.245/'
+  '@solady-v0.0.245/=vendor/solady-v0.0.245/',
 ]
 
 # 5159 error code is selfdestruct error code
-ignored_error_codes = ["transient-storage",5159]
+ignored_error_codes = ["transient-storage", 5159]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
