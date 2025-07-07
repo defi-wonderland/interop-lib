@@ -61,7 +61,7 @@ contract GasTankTest is StdUtils, Test, Relayer {
         bytes32[] memory messageHashes = new bytes32[](1);
         // Encode msg to be executed on the destination chain (902): MessageSender.sendMessages(chainA, 10)
         // chainA == origin chain
-        bytes memory message = abi.encodeCall(MessageSender.sendMessages, (chainA, uint256(10)));
+        bytes memory message = abi.encodeCall(MessageSender.sendMessages, (chainIdByForkId[chainA], uint256(10)));
         uint256 _nonce = messenger.messageNonce();
 
         vm.expectEmit();
