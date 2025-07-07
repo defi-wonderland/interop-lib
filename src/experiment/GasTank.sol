@@ -190,11 +190,11 @@ contract GasTank is IGasTank {
         uint256 fixedCost;
 
         if (_numHashes == 0) {
-            fixedCost = 274_000;
+            fixedCost = 273_521; // Adjusted to fix -121 delta
         } else if (_numHashes == 1) {
-            fixedCost = 304_600;
+            fixedCost = 306_684; // Adjusted to fix +566 delta
         } else {
-            fixedCost = 249_000;
+            fixedCost = 272_700; // Reduced by 300 based on minimum observed
             dynamicCost = 34_800 * _numHashes;
             dynamicCost += (_numHashes * _numHashes) >> 12;
         }
@@ -208,7 +208,7 @@ contract GasTank is IGasTank {
     /// @return overhead_ The gas cost to emit the event in wei
     function _relayOverhead(uint256 _numHashes) internal view returns (uint256 overhead_) {
         uint256 dynamicCost = 417 * _numHashes;
-        uint256 fixedCost = 34_300;
+        uint256 fixedCost = 34_290;
         overhead_ = _cost(fixedCost + dynamicCost, block.basefee);
     }
 
