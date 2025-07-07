@@ -105,7 +105,7 @@ contract GasTank is IGasTank {
         nestedMessageHashes_ = new bytes32[](nonceDelta);
 
         for (uint256 i; i < nonceDelta; i++) {
-            nestedMessageHashes_[i] = MESSENGER.sentMessages(nonceBefore + (i + 1));
+            nestedMessageHashes_[i] = MESSENGER.sentMessages(nonceBefore + i);
         }
 
         // Get the gas used
