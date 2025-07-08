@@ -90,10 +90,14 @@ contract GasTank is IGasTank {
     /// @notice Relays a message to the destination chain
     /// @param _id The identifier of the message
     /// @param _sentMessage The sent message event payload
-    function relayMessage(Identifier calldata _id, bytes calldata _sentMessage)
-        external
-        returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_)
-    {
+    /// @param _gasProvider The address of the gas provider
+    /// @param _gasProviderChainID The chain ID of the gas provider
+    function relayMessage(
+        Identifier calldata _id,
+        bytes calldata _sentMessage,
+        address _gasProvider,
+        uint256 _gasProviderChainID
+    ) external returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_) {
         uint256 initialGas = gasleft();
 
         bytes32 messageHash = _getMessageHash(_id.chainId, _sentMessage);
@@ -115,24 +119,33 @@ contract GasTank is IGasTank {
         relayCost_ = _cost(initialGas - gasleft(), block.basefee) + _relayOverhead(nestedMessageHashes_.length)
             + GAS_PRICE_ORACLE.getL1Fee(msg.data);
 
-        emit RelayedMessageGasReceipt(messageHash, msg.sender, relayCost_, nestedMessageHashes_);
+        emit RelayedMessageGasReceipt(
+            messageHash, msg.sender, _gasProvider, _gasProviderChainID, relayCost_, nestedMessageHashes_
+        );
     }
 
     /// @notice Claims repayment for a relayed message
     /// @param _id The identifier of the message
-    /// @param _gasProvider The address of the gas provider
     /// @param _payload The payload of the message
-    function claim(Identifier calldata _id, address _gasProvider, bytes calldata _payload) external {
+    function claim(Identifier calldata _id, bytes calldata _payload) external {
         // Ensure the origin is a gas tank deployed with the same address on the destination chain
         if (_id.origin != address(this)) revert InvalidOrigin();
 
         // Validate the message
         ICrossL2Inbox(PredeployAddresses.CROSS_L2_INBOX).validateMessage(_id, keccak256(_payload));
 
-        (bytes32 messageHash, address relayer, uint256 relayCost, bytes32[] memory nestedMessageHashes) =
-            decodeGasReceiptPayload(_payload);
+        (
+            bytes32 messageHash,
+            address relayer,
+            address gasProvider,
+            uint256 gasProviderChainID,
+            uint256 relayCost,
+            bytes32[] memory nestedMessageHashes
+        ) = decodeGasReceiptPayload(_payload);
 
-        if (!authorizedMessages[_gasProvider][messageHash]) revert MessageNotAuthorized();
+        if (gasProviderChainID != block.chainid) revert InvalidChainID();
+
+        if (!authorizedMessages[gasProvider][messageHash]) revert MessageNotAuthorized();
 
         if (claimed[messageHash]) revert AlreadyClaimed();
 
@@ -140,39 +153,48 @@ contract GasTank is IGasTank {
 
         if (nestedMessageHashesLength != 0) {
             for (uint256 i; i < nestedMessageHashesLength; i++) {
-                authorizedMessages[_gasProvider][nestedMessageHashes[i]] = true;
+                authorizedMessages[gasProvider][nestedMessageHashes[i]] = true;
             }
-            emit AuthorizedClaims(_gasProvider, nestedMessageHashes);
+            emit AuthorizedClaims(gasProvider, nestedMessageHashes);
         }
 
-        if (balanceOf[_gasProvider] < relayCost) revert InsufficientBalance();
+        if (balanceOf[gasProvider] < relayCost) revert InsufficientBalance();
 
         uint256 claimCost =
-            _min(balanceOf[_gasProvider], claimOverhead(nestedMessageHashesLength, block.basefee, msg.data));
+            _min(balanceOf[gasProvider], claimOverhead(nestedMessageHashesLength, block.basefee, msg.data));
 
-        balanceOf[_gasProvider] -= relayCost + claimCost;
+        balanceOf[gasProvider] -= relayCost + claimCost;
 
         claimed[messageHash] = true;
 
-        delete authorizedMessages[_gasProvider][messageHash];
+        delete authorizedMessages[gasProvider][messageHash];
 
         new SafeSend{value: relayCost}(payable(relayer));
 
         new SafeSend{value: claimCost}(payable(msg.sender));
 
-        emit Claimed(messageHash, relayer, _gasProvider, msg.sender, relayCost, claimCost);
+        emit Claimed(messageHash, relayer, gasProvider, msg.sender, relayCost, claimCost);
     }
 
     /// @notice Decodes the payload of the RelayedMessageGasReceipt event
     /// @param _payload The payload of the event
     /// @return messageHash_ The hash of the relayed message
     /// @return relayer_ The address of the relayer
+    /// @return gasProvider_ The address of the gas provider
+    /// @return gasProviderChainID_ The chain ID of the gas provider
     /// @return relayCost_ The amount of native tokens expended on the relay
     /// @return nestedMessageHashes_ The hashes of the destination messages
     function decodeGasReceiptPayload(bytes calldata _payload)
         public
         pure
-        returns (bytes32 messageHash_, address relayer_, uint256 relayCost_, bytes32[] memory nestedMessageHashes_)
+        returns (
+            bytes32 messageHash_,
+            address relayer_,
+            address gasProvider_,
+            uint256 gasProviderChainID_,
+            uint256 relayCost_,
+            bytes32[] memory nestedMessageHashes_
+        )
     {
         if (bytes32(_payload[:32]) != RelayedMessageGasReceipt.selector) revert InvalidPayload();
 
@@ -180,7 +202,8 @@ contract GasTank is IGasTank {
         (messageHash_, relayer_) = abi.decode(_payload[32:96], (bytes32, address));
 
         // Decode Data
-        (relayCost_, nestedMessageHashes_) = abi.decode(_payload[96:], (uint256, bytes32[]));
+        (gasProvider_, gasProviderChainID_, relayCost_, nestedMessageHashes_) =
+            abi.decode(_payload[96:], (address, uint256, uint256, bytes32[]));
     }
 
     /// @notice Calculates the overhead of a claim
