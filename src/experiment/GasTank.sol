@@ -211,6 +211,7 @@ contract GasTank is IGasTank {
     /// @param _baseFee The base fee of the block
     /// @param _data The data of the transaction
     /// @return overhead_ The overhead cost of the claim transaction in wei
+    /// @dev Gas calculations based on config: optimizer=true, optimizer_runs=999999, evm_version="cancun"
     function claimOverhead(uint256 _numHashes, uint256 _baseFee, bytes calldata _data)
         public
         view
@@ -220,13 +221,13 @@ contract GasTank is IGasTank {
         uint256 fixedCost;
 
         if (_numHashes == 0) {
-            fixedCost = 295_650;
+            fixedCost = 300_450;
         } else if (_numHashes == 1) {
-            fixedCost = 328_800;
+            fixedCost = 335_500;
         } else if (_numHashes == 2) {
-            fixedCost = 364_000;
+            fixedCost = 370_300;
         } else {
-            fixedCost = 295_000;
+            fixedCost = 301_000;
             dynamicCost = 34_800 * _numHashes;
             dynamicCost += (_numHashes * _numHashes) >> 12;
         }
@@ -238,9 +239,10 @@ contract GasTank is IGasTank {
     /// @notice Calculates the overhead to emit RelayedMessageGasReceipt
     /// @param _numHashes The number of destination hashes relayed
     /// @return overhead_ The gas cost to emit the event in wei
+    /// @dev Gas calculations based on config: optimizer=true, optimizer_runs=999999, evm_version="cancun"
     function _relayOverhead(uint256 _numHashes) internal view returns (uint256 overhead_) {
         uint256 dynamicCost = 417 * _numHashes;
-        uint256 fixedCost = 34_340;
+        uint256 fixedCost = 35_480;
         overhead_ = _cost(fixedCost + dynamicCost, block.basefee);
     }
 
