@@ -38,6 +38,9 @@ contract GasTank is IGasTank {
     /// @notice The authorized messages for claiming
     mapping(address gasProvider => mapping(bytes32 messageHash => bool authorized)) public authorizedMessages;
 
+    /// @notice The claimed messages
+    mapping(bytes32 messageHash => bool claimed) public claimed;
+
     /// @notice Deposits funds into the gas tank, from which the relayer can claim the repayment after relaying
     /// @param _to The address to deposit the funds to
     function deposit(address _to) external payable {
@@ -131,6 +134,8 @@ contract GasTank is IGasTank {
 
         if (!authorizedMessages[_gasProvider][messageHash]) revert MessageNotAuthorized();
 
+        if (claimed[messageHash]) revert AlreadyClaimed();
+
         uint256 nestedMessageHashesLength = nestedMessageHashes.length;
 
         if (nestedMessageHashesLength != 0) {
@@ -146,6 +151,8 @@ contract GasTank is IGasTank {
             _min(balanceOf[_gasProvider], claimOverhead(nestedMessageHashesLength, block.basefee, msg.data));
 
         balanceOf[_gasProvider] -= relayCost + claimCost;
+
+        claimed[messageHash] = true;
 
         delete authorizedMessages[_gasProvider][messageHash];
 
@@ -190,11 +197,13 @@ contract GasTank is IGasTank {
         uint256 fixedCost;
 
         if (_numHashes == 0) {
-            fixedCost = 273_521; // Adjusted to fix -121 delta
+            fixedCost = 295_650;
         } else if (_numHashes == 1) {
-            fixedCost = 306_684; // Adjusted to fix +566 delta
+            fixedCost = 328_800;
+        } else if (_numHashes == 2) {
+            fixedCost = 364_000;
         } else {
-            fixedCost = 272_700; // Reduced by 300 based on minimum observed
+            fixedCost = 295_000;
             dynamicCost = 34_800 * _numHashes;
             dynamicCost += (_numHashes * _numHashes) >> 12;
         }
@@ -208,7 +217,7 @@ contract GasTank is IGasTank {
     /// @return overhead_ The gas cost to emit the event in wei
     function _relayOverhead(uint256 _numHashes) internal view returns (uint256 overhead_) {
         uint256 dynamicCost = 417 * _numHashes;
-        uint256 fixedCost = 34_290;
+        uint256 fixedCost = 34_340;
         overhead_ = _cost(fixedCost + dynamicCost, block.basefee);
     }
 

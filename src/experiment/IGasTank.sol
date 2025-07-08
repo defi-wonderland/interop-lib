@@ -3,7 +3,6 @@ pragma solidity ^0.8.25;
 
 import {Identifier} from "../interfaces/IIdentifier.sol";
 import {IL2ToL2CrossDomainMessenger} from "../interfaces/IL2ToL2CrossDomainMessenger.sol";
-import {IGasPriceOracle} from "../interfaces/IGasPriceOracle.sol";
 
 interface IGasTank {
     // Structs
@@ -30,6 +29,7 @@ interface IGasTank {
     event WithdrawalFinalized(address indexed from, address indexed to, uint256 amount);
 
     // Errors
+    error AlreadyClaimed();
     error InvalidOrigin();
     error InvalidPayload();
     error InsufficientBalance();
@@ -40,7 +40,6 @@ interface IGasTank {
     // Constants
     function WITHDRAWAL_DELAY() external pure returns (uint256);
     function MESSENGER() external pure returns (IL2ToL2CrossDomainMessenger);
-    function GAS_PRICE_ORACLE() external pure returns (IGasPriceOracle);
 
     // State Variables
     function balanceOf(address) external view returns (uint256);
