@@ -161,7 +161,7 @@ contract GasTankTest is Test {
         );
 
         bytes memory relayCallData =
-            abi.encodeWithSignature("relayMessage((address,uint256,uint256,uint256,uint256),bytes)", id, sentMessage);
+            abi.encodeWithSignature("relayMessage((address,uint256,uint256,uint256,uint256),bytes,address,uint256)", id, sentMessage, address(0x789), 1);
 
         return TestData({
             messageHash: messageHash,
@@ -262,7 +262,7 @@ contract GasTankTest is Test {
         _setupOracleMockCalls(params, testData);
 
         // Call relayMessage
-        gasTank.relayMessage(testData.id, testData.sentMessage);
+        gasTank.relayMessage(testData.id, testData.sentMessage, address(0x789), 1);
     }
 
     function testFuzz_claim_invalidOrigin_reverts(address _origin) external {
@@ -272,7 +272,7 @@ contract GasTankTest is Test {
         id.origin = _origin;
 
         vm.expectRevert(IGasTank.InvalidOrigin.selector);
-        gasTank.claim(id, address(this), "payload");
+        gasTank.claim(id, "payload");
     }
 
     function testFuzz_claim_invalidPayload_reverts(bytes calldata _payload) external {
@@ -297,7 +297,7 @@ contract GasTankTest is Test {
         );
 
         vm.expectRevert(IGasTank.InvalidPayload.selector);
-        gasTank.claim(id, address(this), _payload);
+        gasTank.claim(id, _payload);
     }
 
     function testFuzz_claim_messageNotAuthorized_reverts(
@@ -314,7 +314,7 @@ contract GasTankTest is Test {
         nestedMessageHashes[0] = _destinationMsgHash;
         bytes memory payload = abi.encodePacked(
             abi.encode(IGasTank.RelayedMessageGasReceipt.selector, _messageHash, _relayer),
-            abi.encode(_relayCost, nestedMessageHashes)
+            abi.encode(_gasProvider, block.chainid, _relayCost, nestedMessageHashes)
         );
         vm.expectCall(
             address(PredeployAddresses.CROSS_L2_INBOX),
@@ -331,7 +331,7 @@ contract GasTankTest is Test {
         );
 
         vm.expectRevert(IGasTank.MessageNotAuthorized.selector);
-        gasTank.claim(id, _gasProvider, payload);
+        gasTank.claim(id, payload);
     }
 
     function testFuzz_claim_alreadyClaimed_reverts(
@@ -348,7 +348,7 @@ contract GasTankTest is Test {
         nestedMessageHashes[0] = _destinationMsgHash;
         bytes memory payload = abi.encodePacked(
             abi.encode(IGasTank.RelayedMessageGasReceipt.selector, _messageHash, _relayer),
-            abi.encode(_relayCost, nestedMessageHashes)
+            abi.encode(_gasProvider, block.chainid, _relayCost, nestedMessageHashes)
         );
 
         stdstore.target(address(gasTank)).sig("authorizedMessages(address,bytes32)").with_key(_gasProvider).with_key(
@@ -372,7 +372,7 @@ contract GasTankTest is Test {
         );
 
         vm.expectRevert(IGasTank.AlreadyClaimed.selector);
-        gasTank.claim(id, _gasProvider, payload);
+        gasTank.claim(id, payload);
     }
 
     function testFuzz_claim_insufficientBalance_reverts(
@@ -396,7 +396,7 @@ contract GasTankTest is Test {
         }
         bytes memory payload = abi.encodePacked(
             abi.encode(IGasTank.RelayedMessageGasReceipt.selector, _messageHash, _relayer),
-            abi.encode(_relayCost, nestedMessageHashes)
+            abi.encode(_gasProvider, block.chainid, _relayCost, nestedMessageHashes)
         );
 
         stdstore.target(address(gasTank)).sig("authorizedMessages(address,bytes32)").with_key(_gasProvider).with_key(
@@ -418,7 +418,7 @@ contract GasTankTest is Test {
         );
 
         vm.expectRevert(IGasTank.InsufficientBalance.selector);
-        gasTank.claim(id, _gasProvider, payload);
+        gasTank.claim(id, payload);
     }
 
     function test_claim_succeeds_basic() external {
@@ -434,9 +434,8 @@ contract GasTankTest is Test {
         
         // Calculate claim overhead for 0 nested messages
         bytes memory claimCall = abi.encodeWithSignature(
-            "claim((address,uint256,uint256,uint256,uint256),address,bytes)", 
+            "claim((address,uint256,uint256,uint256,uint256),bytes)", 
             Identifier(address(gasTank), 0, 0, 0, 0), 
-            gasProvider, 
             ""
         );
         
@@ -468,7 +467,7 @@ contract GasTankTest is Test {
         bytes32[] memory nestedMessageHashes = new bytes32[](0);
         bytes memory payload = abi.encodePacked(
             abi.encode(IGasTank.RelayedMessageGasReceipt.selector, messageHash, relayer),
-            abi.encode(relayCost, nestedMessageHashes)
+            abi.encode(gasProvider, block.chainid, relayCost, nestedMessageHashes)
         );
 
         // Mock calls
@@ -487,7 +486,7 @@ contract GasTankTest is Test {
         );
         
         claimCall = abi.encodeWithSignature(
-            "claim((address,uint256,uint256,uint256,uint256),address,bytes)", id, gasProvider, payload
+            "claim((address,uint256,uint256,uint256,uint256),bytes)", id, payload
         );
         vm.mockCall(
             address(GAS_PRICE_ORACLE), abi.encodeWithSignature("getL1Fee(bytes)", claimCall), abi.encode(L1BaseFee)
@@ -498,7 +497,7 @@ contract GasTankTest is Test {
         vm.deal(address(gasTank), totalBalance);
         uint256 claimerBalanceBefore = address(this).balance;
 
-        gasTank.claim(id, gasProvider, payload);
+        gasTank.claim(id, payload);
 
         // Verify expected behavior
         assertTrue(gasTank.claimed(messageHash), "GasTank should have claimed the root message");
@@ -509,6 +508,8 @@ contract GasTankTest is Test {
     function test_decodeGasReceiptPayload_succeeds() external view {
         bytes32 messageHash = keccak256("test message");
         address relayer = address(0x123);
+        address gasProvider = address(0x456);
+        uint256 gasProviderChainID = block.chainid;
         uint256 relayCost = 1e16;
         bytes32[] memory nestedMessageHashes = new bytes32[](2);
         nestedMessageHashes[0] = keccak256("nested1");
@@ -516,14 +517,16 @@ contract GasTankTest is Test {
 
         bytes memory payload = abi.encodePacked(
             abi.encode(IGasTank.RelayedMessageGasReceipt.selector, messageHash, relayer),
-            abi.encode(relayCost, nestedMessageHashes)
+            abi.encode(gasProvider, gasProviderChainID, relayCost, nestedMessageHashes)
         );
 
-        (bytes32 decodedMessageHash, address decodedRelayer, uint256 decodedRelayCost, bytes32[] memory decodedNestedHashes) = 
+        (bytes32 decodedMessageHash, address decodedRelayer, address decodedGasProvider, uint256 decodedGasProviderChainID, uint256 decodedRelayCost, bytes32[] memory decodedNestedHashes) = 
             gasTank.decodeGasReceiptPayload(payload);
 
         assertEq(decodedMessageHash, messageHash, "Message hash should match");
         assertEq(decodedRelayer, relayer, "Relayer should match");
+        assertEq(decodedGasProvider, gasProvider, "Gas provider should match");
+        assertEq(decodedGasProviderChainID, gasProviderChainID, "Gas provider chain ID should match");
         assertEq(decodedRelayCost, relayCost, "Relay cost should match");
         assertEq(decodedNestedHashes.length, 2, "Should have 2 nested hashes");
         assertEq(decodedNestedHashes[0], nestedMessageHashes[0], "First nested hash should match");

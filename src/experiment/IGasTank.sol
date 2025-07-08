@@ -23,7 +23,12 @@ interface IGasTank {
     );
     event Deposit(address indexed gasProvider, uint256 amount);
     event RelayedMessageGasReceipt(
-        bytes32 indexed messageHash, address indexed relayer, uint256 relayCost, bytes32[] nestedMessageHashes
+        bytes32 indexed messageHash,
+        address indexed relayer,
+        address gasProvider,
+        uint256 gasProviderChainID,
+        uint256 relayCost,
+        bytes32[] nestedMessageHashes
     );
     event WithdrawalInitiated(address indexed from, uint256 amount);
     event WithdrawalFinalized(address indexed from, address indexed to, uint256 amount);
@@ -36,6 +41,7 @@ interface IGasTank {
     error MessageNotAuthorized();
     error WithdrawPending();
     error InvalidLength();
+    error InvalidChainID();
 
     // Constants
     function WITHDRAWAL_DELAY() external pure returns (uint256);
@@ -51,14 +57,24 @@ interface IGasTank {
     function initiateWithdrawal(uint256 _amount) external;
     function finalizeWithdrawal(address _to) external;
     function authorizeClaim(bytes32[] calldata _messageHashes) external;
-    function relayMessage(Identifier calldata _id, bytes calldata _sentMessage)
-        external
-        returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_);
-    function claim(Identifier calldata _id, address _gasProvider, bytes calldata _payload) external;
+    function relayMessage(
+        Identifier calldata _id,
+        bytes calldata _sentMessage,
+        address _gasProvider,
+        uint256 _gasProviderChainID
+    ) external returns (uint256 relayCost_, bytes32[] memory nestedMessageHashes_);
+    function claim(Identifier calldata _id, bytes calldata _payload) external;
     function decodeGasReceiptPayload(bytes calldata _payload)
         external
         pure
-        returns (bytes32 messageHash_, address relayer_, uint256 relayCost_, bytes32[] memory nestedMessageHashes_);
+        returns (
+            bytes32 messageHash_,
+            address relayer_,
+            address gasProvider_,
+            uint256 gasProviderChainID_,
+            uint256 relayCost_,
+            bytes32[] memory nestedMessageHashes_
+        );
     function claimOverhead(uint256 _numHashes, uint256 _baseFee, bytes calldata _data)
         external
         view
