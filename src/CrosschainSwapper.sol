@@ -13,6 +13,8 @@ contract CrosschainSwapper {
     error CrosschainSwapper__InvalidRouter();
     error CrosschainSwapper__InvalidCallback();
 
+    event PromiseDataRegistered(bytes32 promiseData);
+
     Promise public immutable PROMISE;
 
     ISuperchainTokenBridge constant SUPERCHAIN_TOKEN_BRIDGE =
@@ -23,8 +25,7 @@ contract CrosschainSwapper {
 
     UnifiedCallback public immutable CALLBACK;
     address public immutable ROUTER;
-    mapping(bytes32 msgHash => uint256 amountIn) public swapAmountIn;
-    mapping(bytes32 msgHash => uint256 amountOut) public swapAmountOut;
+    mapping(bytes32 promiseData => bool isAllowed) public allowedPromises;
 
     constructor(address _router, address _promise) {
         if (_router == address(0)) revert CrosschainSwapper__InvalidRouter();
@@ -46,11 +47,17 @@ contract CrosschainSwapper {
         ISuperchainERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
         // Execute the bridge to destination chain
-        bytes32 messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
+        bytes32 sendERC20MessageHash =
+            SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
 
-        // Register amount to allow swap on destination chain
-        bytes memory registerAmountMessage = abi.encodeWithSelector(this.registerAmount.selector, messageHash, amountIn);
-        bytes32 registerAmountMessageHash = MESSENGER.sendMessage(destinationId, address(this), registerAmountMessage);
+        // Calculate promise promise data
+        bytes memory promiseData =
+            _encodePromiseData(sendERC20MessageHash, tokenIn, tokenOut, amountIn, minAmountOut, recipient);
+        // Register promise promise data to allow swap on destination chain
+        bytes memory registerPromiseDataMessage =
+            abi.encodeWithSelector(this.registerPromiseData.selector, keccak256(promiseData));
+        bytes32 registerPromiseDataMessageHash =
+            MESSENGER.sendMessage(destinationId, address(this), registerPromiseDataMessage);
 
         // Create promise for this bridge operation
         bridgePromiseId = PROMISE.create();
@@ -58,8 +65,8 @@ contract CrosschainSwapper {
         // Create hybrid callback to execute swap on destination chain when bridge promise resolves AND CDM message succeeds
         // This eliminates the redundant manual CDM check while preserving promise data transfer
         bytes32[] memory cdmHashes = new bytes32[](2);
-        cdmHashes[0] = messageHash;
-        cdmHashes[1] = registerAmountMessageHash;
+        cdmHashes[0] = sendERC20MessageHash;
+        cdmHashes[1] = registerPromiseDataMessageHash;
         swapCallbackId =
             CALLBACK.thenOnWithCDM(destinationId, bridgePromiseId, address(this), this.relaySwap.selector, cdmHashes);
 
@@ -68,7 +75,6 @@ contract CrosschainSwapper {
         CALLBACK.catchErrorOn(destinationId, swapCallbackId, address(this), this.bridgeBackOnError.selector);
 
         // Resolve promise with bridge data and share to destination
-        bytes memory promiseData = _encodePromiseData(messageHash, tokenIn, tokenOut, amountIn, minAmountOut, recipient);
         PROMISE.resolve(bridgePromiseId, promiseData);
         PROMISE.shareResolvedPromise(destinationId, bridgePromiseId);
     }
@@ -80,7 +86,8 @@ contract CrosschainSwapper {
         if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
 
         (
-            bytes32 _msgHash,
+            /*bytes32 msgHash*/
+            ,
             address tokenIn,
             address tokenOut,
             uint256 amountIn,
@@ -89,7 +96,7 @@ contract CrosschainSwapper {
             uint256 destId
         ) = abi.decode(data, (bytes32, address, address, uint256, uint256, address, uint256));
 
-        require(swapAmountIn[_msgHash] == amountIn, "CrosschainSwapper: amount mismatch");
+        require(allowedPromises[keccak256(data)], "CrosschainSwapper: promise data not allowed");
         // CDM success is guaranteed by UnifiedCallback's thenOnWithCDM - no need for manual check
 
         // Approve tokens for MockExchange
@@ -111,25 +118,21 @@ contract CrosschainSwapper {
             revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipientAddr, destId);
         }
 
-        swapAmountOut[_msgHash] = amountOut;
+        bytes32 promiseData = keccak256(abi.encode(msgHash, tokenOut, amountOut, recipientAddr, destId));
+        allowedPromises[promiseData] = true;
+        emit PromiseDataRegistered(promiseData);
 
-        msgHash = _msgHash;
-        finalToken = tokenOut;
-        finalAmount = amountOut;
-        recipient = recipientAddr;
-        destinationId = destId;
+        return (msgHash, tokenOut, amountOut, recipientAddr, destId);
     }
 
     function bridgeBack(bytes memory data) external returns (bytes32 messageHash) {
         if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        require(allowedPromises[keccak256(data)], "CrosschainSwapper: promise data not allowed");
 
-        (bytes32 msgHash, address token, uint256 amountOut, address recipient, uint256 destinationId) =
+        ( /*bytes32 msgHash*/ , address token, uint256 amountOut, address recipient, uint256 destinationId) =
             abi.decode(data, (bytes32, address, uint256, address, uint256));
 
-        require(swapAmountOut[msgHash] == amountOut, "CrosschainSwapper: amount mismatch");
-
         // Bridge the swapped tokens back to original chain
-        // Note: sendERC20 expects (token, recipient, amount, destinationId)
         messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(token, recipient, amountOut, destinationId);
     }
 
@@ -149,26 +152,28 @@ contract CrosschainSwapper {
                 (, bytes32 msgHash, address tokenIn, uint256 amountIn, address recipient, uint256 destinationId) =
                     abi.decode(data, (bytes4, bytes32, address, uint256, address, uint256));
 
-                require(swapAmountIn[msgHash] == amountIn, "CrosschainSwapper: amount mismatch");
+                require(
+                    allowedPromises[keccak256(abi.encode(msgHash, tokenIn, amountIn, recipient, destinationId))],
+                    "CrosschainSwapper: promise data not allowed"
+                );
 
                 // Bridge back the original tokens as a refund
                 messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, recipient, amountIn, destinationId);
             }
         }
 
-        // If we can't parse the error, we still need to return something
-        // In a production system, you might want to emit an event for manual intervention
         return bytes32(0);
     }
 
-    function registerAmount(bytes32 _msgHash, uint256 _amountIn) external {
+    function registerPromiseData(bytes32 _promiseData) external {
         require(msg.sender == address(MESSENGER), "CrosschainSwapper: only callable by Messenger");
         require(
             MESSENGER.crossDomainMessageSender() == address(this),
             "CrosschainSwapper: only callable by CrosschainSwapper contract"
         );
 
-        swapAmountIn[_msgHash] = _amountIn;
+        allowedPromises[_promiseData] = true;
+        emit PromiseDataRegistered(_promiseData);
     }
 
     function _encodePromiseData(
