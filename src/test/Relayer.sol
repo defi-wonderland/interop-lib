@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Vm} from "forge-std/Vm.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 import {CommonBase} from "forge-std/Base.sol";
 
 import {IL2ToL2CrossDomainMessenger, Identifier} from "../interfaces/IL2ToL2CrossDomainMessenger.sol";
 import {ICrossL2Inbox} from "../interfaces/ICrossL2Inbox.sol";
+import {IMessageRelayer} from "../interfaces/IMessageRelayer.sol";
 import {IPromise} from "../interfaces/IPromise.sol";
 
 import {PredeployAddresses} from "../libraries/PredeployAddresses.sol";
 import {CrossDomainMessageLib} from "../libraries/CrossDomainMessageLib.sol";
-
-struct RelayedMessage {
-    Identifier id;
-    bytes payload;
-}
 
 /**
  * @title Relayer
@@ -24,9 +20,17 @@ struct RelayedMessage {
  *      It captures SentMessage events using vm.recordLogs() and vm.getRecordedLogs() and relays them to their destination chains.
  */
 abstract contract Relayer is CommonBase {
+    struct RelayedMessage {
+        Identifier id;
+        bytes payload;
+    }
+
     /// @notice Reference to the L2ToL2CrossDomainMessenger contract
     IL2ToL2CrossDomainMessenger messenger =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
+
+    /// @notice Reference to the CrossL2Inbox contract
+    ICrossL2Inbox crossL2Inbox = ICrossL2Inbox(PredeployAddresses.CROSS_L2_INBOX);
 
     /// @notice Array of fork IDs
     uint256[] public forkIds;
@@ -65,7 +69,42 @@ abstract contract Relayer is CommonBase {
     }
 
     /**
-     * @notice Relays all pending cross-chain messages. All messages must have the same source chain.
+     * @notice Relays all pending cross-chain messages using L2ToL2CrossDomainMessenger.
+     */
+    function relayAllMessages() public returns (RelayedMessage[] memory messages_) {
+        messages_ = relayMessages(vm.getRecordedLogs(), chainIdByForkId[vm.activeFork()]);
+    }
+
+    /**
+     * @notice Relays all pending cross-chain messages using a custom message relayer.
+     */
+    function relayAllMessagesWith(address messageRelayer) public returns (RelayedMessage[] memory messages_) {
+        messages_ = relayMessagesWith(messageRelayer, vm.getRecordedLogs(), chainIdByForkId[vm.activeFork()]);
+    }
+
+    /**
+     * @notice Relays a subset of the total logs using L2ToL2CrossDomainMessenger.
+     */
+    function relayMessages(Vm.Log[] memory logs, uint256 sourceChainId)
+        public
+        returns (RelayedMessage[] memory messages_)
+    {
+        messages_ = _relayMessages(address(messenger), logs, sourceChainId);
+    }
+
+    /**
+     * @notice Relays a subset of the total logs using a custom message relayer.
+     */
+    function relayMessagesWith(address messageRelayer, Vm.Log[] memory logs, uint256 sourceChainId)
+        public
+        returns (RelayedMessage[] memory messages_)
+    {
+        messages_ = _relayMessages(messageRelayer, logs, sourceChainId);
+    }
+
+    /**
+     * @notice Relays a set of logs with a custom message relayer.
+     * @dev All messages must have the same source chain.
      * @dev Filters logs for SentMessage events and relays them to their destination chains
      *      This function handles the entire relay process:
      *      1. Captures all SentMessage events
@@ -73,17 +112,13 @@ abstract contract Relayer is CommonBase {
      *      3. Creates an Identifier for each message
      *      4. Selects the destination chain fork
      *      5. Relays the message to the destination
+     * @param messageRelayer The address of the message relayer to use
+     * @param logs The set of logs to relay
+     * @param sourceChainId The chain ID where the messages originated
+     * @return messages_ Array of RelayedMessage structs containing the message IDs and payloads that were processed
      */
-    function relayAllMessages() public returns (RelayedMessage[] memory messages_) {
-        messages_ = relayMessages(vm.getRecordedLogs(), chainIdByForkId[vm.activeFork()]);
-    }
-
-    /**
-     * Use this instead of relayAllMessages if you want to relay a subset of logs and need to have control over when
-     * vm.getRecordedLogs() is called.
-     */
-    function relayMessages(Vm.Log[] memory logs, uint256 sourceChainId)
-        public
+    function _relayMessages(address messageRelayer, Vm.Log[] memory logs, uint256 sourceChainId)
+        internal
         returns (RelayedMessage[] memory messages_)
     {
         uint256 originalFork = vm.activeFork();
@@ -106,12 +141,18 @@ abstract contract Relayer is CommonBase {
             Identifier memory id = Identifier(log.emitter, block.number, i, block.timestamp, sourceChainId);
             bytes memory payload = constructMessagePayload(log);
 
-            // Warm slot
-            bytes32 slot = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
-            vm.load(PredeployAddresses.CROSS_L2_INBOX, slot);
+            // Build access list
+            bytes32[] memory storageKeys = new bytes32[](2);
+            // Storage key 0: idPacked
+            storageKeys[0] = CrossDomainMessageLib.packIdentifier(id);
+            // Storage key 1: checksum
+            storageKeys[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: storageKeys});
 
             // Relay message
-            messenger.relayMessage(id, payload);
+            vm.accessList(accessList);
+            IMessageRelayer(messageRelayer).relayMessage(id, payload);
 
             // Add to messages array (using index assignment instead of push)
             messages_[messageCount] = RelayedMessage({id: id, payload: payload});
@@ -167,10 +208,16 @@ abstract contract Relayer is CommonBase {
             bytes memory payload = constructMessagePayload(log);
             Identifier memory id = Identifier(log.emitter, block.number, 0, block.timestamp, sourceChainId);
 
-            // Warm slot
-            bytes32 slot = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
-            vm.load(PredeployAddresses.CROSS_L2_INBOX, slot);
+            // Build access list
+            bytes32[] memory storageKeys = new bytes32[](2);
+            // Storage key 0: idPacked
+            storageKeys[0] = CrossDomainMessageLib.packIdentifier(id);
+            // Storage key 1: checksum
+            storageKeys[1] = CrossDomainMessageLib.calculateChecksum(id, keccak256(payload));
+            VmSafe.AccessListItem[] memory accessList = new VmSafe.AccessListItem[](1);
+            accessList[0] = VmSafe.AccessListItem({target: address(crossL2Inbox), storageKeys: storageKeys});
 
+            vm.accessList(accessList);
             p.dispatchCallbacks(id, payload);
 
             // Add to messages array (using index assignment instead of push)

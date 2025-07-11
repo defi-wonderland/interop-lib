@@ -78,13 +78,8 @@ library CrossDomainMessageLib {
         // Hash the origin address and message hash together
         bytes32 logHash = keccak256(abi.encodePacked(_id.origin, _msgHash));
 
-        // Downsize the identifier fields to match the needed type for the custom checksum calculation.
-        uint64 blockNumber = uint64(_id.blockNumber);
-        uint64 timestamp = uint64(_id.timestamp);
-        uint32 logIndex = uint32(_id.logIndex);
-
-        // Pack identifier fields with a left zero padding (uint96(0))
-        bytes32 idPacked = bytes32(abi.encodePacked(uint96(0), blockNumber, timestamp, logIndex));
+        // Pack the identifier
+        bytes32 idPacked = packIdentifier(_id);
 
         // Hash the logHash with the packed identifier data
         bytes32 idLogHash = keccak256(abi.encodePacked(logHash, idPacked));
@@ -94,5 +89,18 @@ library CrossDomainMessageLib {
 
         // Apply bit masking to create the final checksum
         checksum_ = (bareChecksum & _MSB_MASK) | _TYPE_3_MASK;
+    }
+
+    /// @notice Packs the identifier fields with a left zero padding (uint96(0)).
+    /// @dev Downsizes the identifier fields to match the needed type for the checksum calculation.
+    /// @param _id The identifier to pack.
+    /// @return idPacked_ The packed identifier.
+    function packIdentifier(Identifier memory _id) public pure returns (bytes32 idPacked_) {
+        if (_id.blockNumber > type(uint64).max) revert BlockNumberTooHigh();
+        if (_id.logIndex > type(uint32).max) revert LogIndexTooHigh();
+        if (_id.timestamp > type(uint64).max) revert TimestampTooHigh();
+
+        idPacked_ =
+            bytes32(abi.encodePacked(uint96(0), uint64(_id.blockNumber), uint64(_id.timestamp), uint32(_id.logIndex)));
     }
 }
