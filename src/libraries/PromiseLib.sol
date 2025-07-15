@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-import {PromiseCallback3} from "../PromiseCallback3.sol";
+import {PromiseCallback} from "../PromiseCallback.sol";
 import {IValidator} from "../interfaces/IValidator.sol";
 
 /// @title PromiseLib
-/// @notice Convenience library for simplified promise creation with PromiseCallback3
+/// @notice Convenience library for simplified promise creation with PromiseCallback
 /// @dev Provides developer-friendly wrappers around the core create() function
 library PromiseLib {
     // =============================================================================
@@ -14,11 +14,11 @@ library PromiseLib {
 
     /// @notice Create a basic manual promise
     /// @return promiseId The unique identifier for the new promise
-    function createManual(PromiseCallback3 callback) internal returns (bytes32 promiseId) {
+    function createManual(PromiseCallback callback) internal returns (bytes32 promiseId) {
         return callback.create(
             msg.sender, // caller is resolver
             bytes32(0), // no parent
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             address(0), // manual resolution
             "", // no execution data
             IValidator(address(0)), // no validator
@@ -31,14 +31,14 @@ library PromiseLib {
     /// @param target The contract to call when resolving
     /// @param selector The function selector to call
     /// @return promiseId The unique identifier for the new promise
-    function createAuto(PromiseCallback3 callback, address target, bytes4 selector)
+    function createAuto(PromiseCallback callback, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback), // contract resolves it
             bytes32(0), // no parent
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -51,14 +51,14 @@ library PromiseLib {
     /// @param target The contract to call when resolving
     /// @param callData The complete calldata for the call
     /// @return promiseId The unique identifier for the new promise
-    function createAutoWithCalldata(PromiseCallback3 callback, address target, bytes memory callData)
+    function createAutoWithCalldata(PromiseCallback callback, address target, bytes memory callData)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback), // contract resolves it
             bytes32(0), // no parent
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             target,
             callData,
             IValidator(address(0)),
@@ -74,7 +74,7 @@ library PromiseLib {
     /// @param validationData Data for the validator
     /// @return promiseId The unique identifier for the new promise
     function createWithValidator(
-        PromiseCallback3 callback,
+        PromiseCallback callback,
         address target,
         bytes4 selector,
         IValidator validator,
@@ -83,7 +83,7 @@ library PromiseLib {
         return callback.create(
             address(callback),
             bytes32(0),
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             target,
             abi.encodePacked(selector),
             validator,
@@ -101,14 +101,14 @@ library PromiseLib {
     /// @param target The contract to call when parent resolves
     /// @param selector The function selector to call
     /// @return promiseId The ID of the created promise
-    function then(PromiseCallback3 callback, bytes32 parentId, address target, bytes4 selector)
+    function then(PromiseCallback callback, bytes32 parentId, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Then,
+            PromiseCallback.DependencyType.Then,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -125,7 +125,7 @@ library PromiseLib {
     /// @param validationData Data for the validator
     /// @return promiseId The ID of the created promise
     function then(
-        PromiseCallback3 callback,
+        PromiseCallback callback,
         bytes32 parentId,
         address target,
         bytes4 selector,
@@ -135,7 +135,7 @@ library PromiseLib {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Then,
+            PromiseCallback.DependencyType.Then,
             target,
             abi.encodePacked(selector),
             validator,
@@ -149,14 +149,14 @@ library PromiseLib {
     /// @param target The contract to call when parent rejects
     /// @param selector The function selector to call
     /// @return promiseId The ID of the created promise
-    function catchError(PromiseCallback3 callback, bytes32 parentId, address target, bytes4 selector)
+    function catchError(PromiseCallback callback, bytes32 parentId, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Catch,
+            PromiseCallback.DependencyType.Catch,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -173,7 +173,7 @@ library PromiseLib {
     /// @param validationData Data for the validator
     /// @return promiseId The ID of the created promise
     function catchError(
-        PromiseCallback3 callback,
+        PromiseCallback callback,
         bytes32 parentId,
         address target,
         bytes4 selector,
@@ -183,7 +183,7 @@ library PromiseLib {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Catch,
+            PromiseCallback.DependencyType.Catch,
             target,
             abi.encodePacked(selector),
             validator,
@@ -199,11 +199,11 @@ library PromiseLib {
     /// @notice Create a manual promise on another chain
     /// @param chain The destination chain ID
     /// @return promiseId The unique identifier for the new promise
-    function createManualOn(PromiseCallback3 callback, uint256 chain) internal returns (bytes32 promiseId) {
+    function createManualOn(PromiseCallback callback, uint256 chain) internal returns (bytes32 promiseId) {
         return callback.create(
             msg.sender,
             bytes32(0),
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             address(0),
             "",
             IValidator(address(0)),
@@ -217,14 +217,14 @@ library PromiseLib {
     /// @param target The contract to call when resolving
     /// @param selector The function selector to call
     /// @return promiseId The unique identifier for the new promise
-    function createAutoOn(PromiseCallback3 callback, uint256 chain, address target, bytes4 selector)
+    function createAutoOn(PromiseCallback callback, uint256 chain, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback),
             bytes32(0),
-            PromiseCallback3.DependencyType.None,
+            PromiseCallback.DependencyType.None,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -239,14 +239,14 @@ library PromiseLib {
     /// @param target The contract to call when parent resolves
     /// @param selector The function selector to call
     /// @return promiseId The ID of the created promise
-    function thenOn(PromiseCallback3 callback, bytes32 parentId, uint256 chain, address target, bytes4 selector)
+    function thenOn(PromiseCallback callback, bytes32 parentId, uint256 chain, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Then,
+            PromiseCallback.DependencyType.Then,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -264,7 +264,7 @@ library PromiseLib {
     /// @param validationData Data for the validator
     /// @return promiseId The ID of the created promise
     function thenOn(
-        PromiseCallback3 callback,
+        PromiseCallback callback,
         bytes32 parentId,
         uint256 chain,
         address target,
@@ -275,7 +275,7 @@ library PromiseLib {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Then,
+            PromiseCallback.DependencyType.Then,
             target,
             abi.encodePacked(selector),
             validator,
@@ -290,14 +290,14 @@ library PromiseLib {
     /// @param target The contract to call when parent rejects
     /// @param selector The function selector to call
     /// @return promiseId The ID of the created promise
-    function catchErrorOn(PromiseCallback3 callback, bytes32 parentId, uint256 chain, address target, bytes4 selector)
+    function catchErrorOn(PromiseCallback callback, bytes32 parentId, uint256 chain, address target, bytes4 selector)
         internal
         returns (bytes32 promiseId)
     {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Catch,
+            PromiseCallback.DependencyType.Catch,
             target,
             abi.encodePacked(selector),
             IValidator(address(0)),
@@ -315,7 +315,7 @@ library PromiseLib {
     /// @param validationData Data for the validator
     /// @return promiseId The ID of the created promise
     function catchErrorOn(
-        PromiseCallback3 callback,
+        PromiseCallback callback,
         bytes32 parentId,
         uint256 chain,
         address target,
@@ -326,7 +326,7 @@ library PromiseLib {
         return callback.create(
             address(callback),
             parentId,
-            PromiseCallback3.DependencyType.Catch,
+            PromiseCallback.DependencyType.Catch,
             target,
             abi.encodePacked(selector),
             validator,
@@ -343,7 +343,7 @@ library PromiseLib {
     /// @param targets Array of contracts to call in sequence
     /// @param selectors Array of function selectors to call
     /// @return finalPromiseId The ID of the last promise in the chain
-    function createChain(PromiseCallback3 callback, address[] memory targets, bytes4[] memory selectors)
+    function createChain(PromiseCallback callback, address[] memory targets, bytes4[] memory selectors)
         internal
         returns (bytes32 finalPromiseId)
     {

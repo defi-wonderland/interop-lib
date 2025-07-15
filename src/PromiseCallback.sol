@@ -6,10 +6,10 @@ import {IL2ToL2CrossDomainMessenger} from "./interfaces/IL2ToL2CrossDomainMessen
 import {IValidator} from "./interfaces/IValidator.sol";
 import {PredeployAddresses} from "./libraries/PredeployAddresses.sol";
 
-/// @title PromiseCallback3
+/// @title PromiseCallback
 /// @notice Pure promise system where everything is a promise
 /// @dev Unified design eliminating artificial promise/callback distinction
-contract PromiseCallback3 is IResolvable {
+contract PromiseCallback is IResolvable {
     /// @notice Promise states matching JavaScript promise semantics
     enum PromiseStatus {
         Pending,
@@ -112,7 +112,7 @@ contract PromiseCallback3 is IResolvable {
     ) external returns (bytes32 promiseId) {
         // Validate execution data if target is provided
         if (target != address(0)) {
-            require(executionData.length >= 4, "PromiseCallback3: execution data too short");
+            require(executionData.length >= 4, "PromiseCallback: execution data too short");
         }
 
         // Use current chain if not specified
@@ -161,7 +161,7 @@ contract PromiseCallback3 is IResolvable {
         bytes memory validationData,
         uint256 destinationChain
     ) internal returns (bytes32) {
-        require(destinationChain != 0, "PromiseCallback3: destination chain cannot be 0");
+        require(destinationChain != 0, "PromiseCallback: destination chain cannot be 0");
 
         // Generate ID if not specified
         if (promiseId == bytes32(0)) {
@@ -170,7 +170,7 @@ contract PromiseCallback3 is IResolvable {
         }
 
         // Add existence check before creating
-        require(promises[promiseId].resolver == address(0), "PromiseCallback3: promise already exists");
+        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
 
         // Handle cross-chain creation
         if (destinationChain != block.chainid) {
@@ -216,7 +216,7 @@ contract PromiseCallback3 is IResolvable {
     /// @notice Resolve any promise - unified resolution path
     /// @param promiseId The ID of the promise to resolve
     function resolve(bytes32 promiseId) external {
-        require(canResolve(promiseId), "PromiseCallback3: cannot resolve");
+        require(canResolve(promiseId), "PromiseCallback: cannot resolve");
 
         Promise storage promiseData = promises[promiseId];
 
@@ -225,7 +225,7 @@ contract PromiseCallback3 is IResolvable {
             _executeTarget(promiseId);
         } else {
             // Manual resolution - only resolver can resolve without data
-            require(msg.sender == promiseData.resolver, "PromiseCallback3: only resolver can resolve");
+            require(msg.sender == promiseData.resolver, "PromiseCallback: only resolver can resolve");
             _resolvePromise(promiseId, "");
         }
     }
@@ -234,8 +234,8 @@ contract PromiseCallback3 is IResolvable {
     /// @param promiseId The ID of the promise to resolve
     /// @param returnData The data to resolve the promise with
     function resolveWith(bytes32 promiseId, bytes calldata returnData) external {
-        require(canResolve(promiseId), "PromiseCallback3: cannot resolve");
-        require(msg.sender == promises[promiseId].resolver, "PromiseCallback3: only resolver can resolve");
+        require(canResolve(promiseId), "PromiseCallback: cannot resolve");
+        require(msg.sender == promises[promiseId].resolver, "PromiseCallback: only resolver can resolve");
 
         _resolvePromise(promiseId, returnData);
     }
@@ -245,8 +245,8 @@ contract PromiseCallback3 is IResolvable {
     /// @param errorData The error data to reject the promise with
     function reject(bytes32 promiseId, bytes memory errorData) external {
         Promise storage promiseData = promises[promiseId];
-        require(promiseData.status == PromiseStatus.Pending, "PromiseCallback3: promise already settled");
-        require(msg.sender == promiseData.resolver, "PromiseCallback3: only resolver can reject");
+        require(promiseData.status == PromiseStatus.Pending, "PromiseCallback: promise already settled");
+        require(msg.sender == promiseData.resolver, "PromiseCallback: only resolver can reject");
 
         _rejectPromise(promiseId, errorData);
     }
@@ -304,7 +304,7 @@ contract PromiseCallback3 is IResolvable {
             // Full calldata mode (>4 bytes) - use as-is, ignore parent
             executeCallData = executionData;
         } else {
-            revert("PromiseCallback3: invalid execution data length");
+            revert("PromiseCallback: invalid execution data length");
         }
     }
 
@@ -314,7 +314,7 @@ contract PromiseCallback3 is IResolvable {
         Promise memory promiseData = promises[promiseId];
 
         // Reentrancy protection
-        require(currentExecutionContext == DEFAULT_EXECUTION_REGISTRANT, "PromiseCallback3: re-entrant call detected");
+        require(currentExecutionContext == DEFAULT_EXECUTION_REGISTRANT, "PromiseCallback: re-entrant call detected");
 
         // Prepare call data based on execution mode
         bytes memory executeCallData = _prepareExecutionCallData(promiseData.executionData, promiseData.parentPromiseId);
@@ -445,12 +445,11 @@ contract PromiseCallback3 is IResolvable {
         address validator,
         bytes calldata validationData
     ) external {
-        require(msg.sender == address(MESSENGER), "PromiseCallback3: only messenger can call");
+        require(msg.sender == address(MESSENGER), "PromiseCallback: only messenger can call");
         require(
-            MESSENGER.crossDomainMessageSender() == address(this),
-            "PromiseCallback3: only from PromiseCallback3 contract"
+            MESSENGER.crossDomainMessageSender() == address(this), "PromiseCallback: only from PromiseCallback contract"
         );
-        require(promises[promiseId].resolver == address(0), "PromiseCallback3: promise already exists");
+        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
 
         promises[promiseId] = Promise({
             resolver: resolver,
@@ -473,10 +472,10 @@ contract PromiseCallback3 is IResolvable {
     /// @param destinationChain The chain ID to share the promise with
     /// @param promiseId The ID of the promise to share
     function sharePromise(uint256 destinationChain, bytes32 promiseId) external {
-        require(destinationChain != block.chainid, "PromiseCallback3: cannot share to same chain");
+        require(destinationChain != block.chainid, "PromiseCallback: cannot share to same chain");
 
         Promise memory promiseData = promises[promiseId];
-        require(promiseData.status != PromiseStatus.Pending, "PromiseCallback3: can only share settled promises");
+        require(promiseData.status != PromiseStatus.Pending, "PromiseCallback: can only share settled promises");
 
         bytes memory message = abi.encodeCall(
             this.receiveSharedPromise,
@@ -496,12 +495,11 @@ contract PromiseCallback3 is IResolvable {
     function receiveSharedPromise(bytes32 promiseId, uint8 promiseStatus, bytes memory returnData, address resolver)
         external
     {
-        require(msg.sender == address(MESSENGER), "PromiseCallback3: only messenger can call");
+        require(msg.sender == address(MESSENGER), "PromiseCallback: only messenger can call");
         require(
-            MESSENGER.crossDomainMessageSender() == address(this),
-            "PromiseCallback3: only from PromiseCallback3 contract"
+            MESSENGER.crossDomainMessageSender() == address(this), "PromiseCallback: only from PromiseCallback contract"
         );
-        require(promises[promiseId].resolver == address(0), "PromiseCallback3: promise already exists");
+        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
 
         Promise storage promiseData = promises[promiseId];
 

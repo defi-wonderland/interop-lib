@@ -1,21 +1,33 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.25;
 
-import {Promise} from "./Promise.sol";
-import {UnifiedCallback} from "./UnifiedCallback.sol";
+import {PromiseLib} from "./libraries/PromiseLib.sol";
+import {PromiseCallback} from "./PromiseCallback.sol";
 import {PredeployAddresses} from "./libraries/PredeployAddresses.sol";
 import {ISuperchainTokenBridge} from "./interfaces/ISuperchainTokenBridge.sol";
 import {IL2ToL2CrossDomainMessenger} from "./interfaces/IL2ToL2CrossDomainMessenger.sol";
 import {ISuperchainERC20} from "./interfaces/ISuperchainERC20.sol";
+import {IValidator} from "./interfaces/IValidator.sol";
 
 contract CrosschainSwapper {
+    using PromiseLib for PromiseCallback;
+
+    struct SwapParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 minAmountOut;
+        address recipient;
+        uint256 destinationId;
+    }
+
     error CrosschainSwapper__SwapFailed(address tokenIn, uint256 amountIn, address recipient, uint256 destinationId);
     error CrosschainSwapper__InvalidRouter();
     error CrosschainSwapper__InvalidCallback();
+    error CrosschainSwapper__InvalidPromiseCallback();
+    error CrosschainSwapper__InvalidCreator();
 
     event PromiseDataRegistered(bytes32 promiseData);
-
-    Promise public immutable PROMISE;
 
     ISuperchainTokenBridge constant SUPERCHAIN_TOKEN_BRIDGE =
         ISuperchainTokenBridge(PredeployAddresses.SUPERCHAIN_TOKEN_BRIDGE);
@@ -23,15 +35,17 @@ contract CrosschainSwapper {
     IL2ToL2CrossDomainMessenger constant MESSENGER =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
 
-    UnifiedCallback public immutable CALLBACK;
+    PromiseCallback public immutable PROMISE_CALLBACK;
     address public immutable ROUTER;
+    IValidator public immutable VALIDATOR;
 
-    constructor(address _router, address _promise) {
+    constructor(address _promiseCallback, address _router, address _validator) {
         if (_router == address(0)) revert CrosschainSwapper__InvalidRouter();
+        if (_promiseCallback == address(0)) revert CrosschainSwapper__InvalidPromiseCallback();
 
-        PROMISE = Promise(_promise);
-        CALLBACK = new UnifiedCallback(address(PROMISE), address(MESSENGER));
+        PROMISE_CALLBACK = PromiseCallback(_promiseCallback);
         ROUTER = _router;
+        VALIDATOR = IValidator(_validator);
     }
 
     function initSwap(
@@ -41,50 +55,43 @@ contract CrosschainSwapper {
         uint256 amountIn,
         uint256 minAmountOut,
         address recipient
-    ) external returns (bytes32 bridgePromiseId, bytes32 swapCallbackId, bytes32 bridgeBackCallbackId) {
+    ) external returns (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) {
         // transfer tokens from user to this contract
         ISuperchainERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
-        // Execute the bridge to destination chain
+        // Send tokens to destination chain
         bytes32 sendERC20MessageHash =
             SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
 
-        // Create promise for this bridge operation
-        bridgePromiseId = PROMISE.create();
+        // Create promise for bridge to destination chain
+        SwapParams memory params = SwapParams({
+            tokenIn: tokenIn,
+            tokenOut: tokenOut,
+            amountIn: amountIn,
+            minAmountOut: minAmountOut,
+            recipient: recipient,
+            destinationId: destinationId
+        });
+        bridgeId = _createBridgePromise(sendERC20MessageHash, params);
 
-        // Create hybrid callback to execute swap on destination chain when bridge promise resolves AND CDM message succeeds
-        // This eliminates the redundant manual CDM check while preserving promise data transfer
-        bytes32[] memory cdmHashes = new bytes32[](1);
-        cdmHashes[0] = sendERC20MessageHash;
-        swapCallbackId =
-            CALLBACK.thenOnWithCDM(destinationId, bridgePromiseId, address(this), this.relaySwap.selector, cdmHashes);
-
-        // Create callbacks for bridging back - both success and failure cases
-        bridgeBackCallbackId = CALLBACK.thenOn(destinationId, swapCallbackId, address(this), this.bridgeBack.selector);
-        CALLBACK.catchErrorOn(destinationId, swapCallbackId, address(this), this.bridgeBackOnError.selector);
-
-        // Calculate promise promise data
-        bytes memory promiseData = abi.encode(tokenIn, tokenOut, amountIn, minAmountOut, recipient, block.chainid);
-        // Resolve promise with bridge data and share to destination
-        PROMISE.resolve(bridgePromiseId, promiseData);
-        PROMISE.shareResolvedPromise(destinationId, bridgePromiseId);
+        // Attach then to bridge promise
+        bridgeBackId = PROMISE_CALLBACK.thenOn(bridgeId, destinationId, address(this), this.bridgeBack.selector);
+        // Attach catch to bridge promise
+        bridgeBackOnErrorId =
+            PROMISE_CALLBACK.catchErrorOn(bridgeId, destinationId, address(this), this.bridgeBackOnError.selector);
     }
 
-    function relaySwap(bytes memory data)
-        external
-        returns (address finalToken, uint256 finalAmount, address recipient, uint256 destinationId)
-    {
-        if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
-
-        (
-            address tokenIn,
-            address tokenOut,
-            uint256 amountIn,
-            uint256 minAmountOut,
-            address recipientAddr,
-            uint256 destId
-        ) = abi.decode(data, (address, address, uint256, uint256, address, uint256));
+    function relaySwap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256 destinationId
+    ) external returns (address finalToken, uint256 finalAmount, address finalRecipient, uint256 finalDestinationId) {
+        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        (address creator,) = PROMISE_CALLBACK.executionContext();
+        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
 
         // Approve tokens for MockExchange
         ISuperchainERC20(tokenIn).approve(ROUTER, amountIn);
@@ -94,7 +101,7 @@ contract CrosschainSwapper {
             ROUTER.call(abi.encodeWithSignature("swap(address,address,uint256)", tokenIn, tokenOut, amountIn));
 
         if (!success) {
-            revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipientAddr, destId);
+            revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipient, destinationId);
         }
 
         // Decode swap results - MockExchange returns uint256 amountOut
@@ -102,15 +109,16 @@ contract CrosschainSwapper {
 
         // Verify minimum amount out
         if (amountOut < minAmountOut) {
-            revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipientAddr, destId);
+            revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipient, destinationId);
         }
 
-        return (tokenOut, amountOut, recipientAddr, destId);
+        return (tokenOut, amountOut, recipient, destinationId);
     }
 
     function bridgeBack(bytes memory data) external returns (bytes32 messageHash) {
-        if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
+        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        (address creator,) = PROMISE_CALLBACK.executionContext();
+        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
 
         (address token, uint256 amountOut, address recipient, uint256 destinationId) =
             abi.decode(data, (address, uint256, address, uint256));
@@ -120,8 +128,10 @@ contract CrosschainSwapper {
     }
 
     function bridgeBackOnError(bytes memory data) external returns (bytes32 messageHash) {
-        if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
+        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        (address creator,) = PROMISE_CALLBACK.executionContext();
+        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
+
         // Parse error data to extract original bridge information for refund
         // The error data contains the revert reason from relaySwap
         if (data.length >= 4) {
@@ -150,5 +160,27 @@ contract CrosschainSwapper {
         }
 
         return bytes32(0);
+    }
+
+    function _createBridgePromise(bytes32 sendERC20MessageHash, SwapParams memory params)
+        private
+        returns (bytes32 bridgeId)
+    {
+        bytes32[] memory msgHashes = new bytes32[](1);
+        msgHashes[0] = sendERC20MessageHash;
+
+        bridgeId = PROMISE_CALLBACK.create(
+            address(this), // resolver
+            bytes32(0), // parent promise id
+            PromiseCallback.DependencyType.None, // dependency type
+            address(this), // target
+            abi.encodeCall(
+                this.relaySwap,
+                (params.tokenIn, params.tokenOut, params.amountIn, params.minAmountOut, params.recipient, block.chainid)
+            ), // execution data
+            VALIDATOR, // validator
+            abi.encode(msgHashes), // validation data
+            params.destinationId
+        );
     }
 }

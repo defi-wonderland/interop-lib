@@ -4,9 +4,9 @@ pragma solidity ^0.8.25;
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 import {Relayer} from "src/test/Relayer.sol";
-import {Promise} from "src/Promise.sol";
-import {UnifiedCallback} from "src/UnifiedCallback.sol";
+import {PromiseCallback} from "src/PromiseCallback.sol";
 import {CrosschainSwapper} from "src/CrosschainSwapper.sol";
+import {Validator} from "src/Validator.sol";
 import {SuperchainTokenBridge} from "src/SuperchainTokenBridge.sol";
 import {PredeployAddresses} from "src/libraries/PredeployAddresses.sol";
 
@@ -14,17 +14,21 @@ import {PredeployAddresses} from "src/libraries/PredeployAddresses.sol";
 import {MockSuperchainERC20} from "test/examples/utils/MockSuperchainERC20.sol";
 import {MockExchange} from "test/examples/utils/MockExchange.sol";
 
-/// @title CrosschainSwapperE2E
+/// @title BridgeSwapBridge
 /// @notice E2E test demonstrating CrosschainSwapper cross-chain swap workflow
 /// @dev Flow: Chain A initSwap -> Chain B relaySwap -> Chain B bridgeBack -> Chain A
-contract CrosschainSwapperE2ETest is Test, Relayer {
+contract BridgeSwapBridgeTest is Test, Relayer {
     // Promise system contracts (deployed on both chains)
-    Promise public promiseA;
-    Promise public promiseB;
+    PromiseCallback public promiseCallbackA;
+    PromiseCallback public promiseCallbackB;
+
+    // Validator contracts
+    Validator public validatorA;
+    Validator public validatorB;
 
     // CrosschainSwapper contracts
-    CrosschainSwapper public CrosschainSwapperA;
-    CrosschainSwapper public CrosschainSwapperB;
+    CrosschainSwapper public crosschainSwapperA;
+    CrosschainSwapper public crosschainSwapperB;
 
     // SuperchainTokenBridge contracts
     SuperchainTokenBridge public tokenBridgeA;
@@ -65,15 +69,27 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
         vm.makePersistent(user);
         vm.makePersistent(liquidityProvider);
 
-        // Deploy Promise contracts using CREATE2 for same addresses
+        // Deploy PromiseCallback contracts using CREATE2 for same addresses
         vm.selectFork(forkIds[0]);
-        promiseA = new Promise{salt: bytes32(0)}(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
+        promiseCallbackA = new PromiseCallback{salt: bytes32(0)}();
 
         vm.selectFork(forkIds[1]);
-        promiseB = new Promise{salt: bytes32(0)}(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
+        promiseCallbackB = new PromiseCallback{salt: bytes32(0)}();
 
         // Verify same addresses
-        require(address(promiseA) == address(promiseB), "Promise contracts must have same address");
+        require(
+            address(promiseCallbackA) == address(promiseCallbackB), "PromiseCallback contracts must have same address"
+        );
+
+        // Deploy Validator contracts using CREATE2 for same addresses
+        vm.selectFork(forkIds[0]);
+        validatorA = new Validator{salt: bytes32(0)}();
+
+        vm.selectFork(forkIds[1]);
+        validatorB = new Validator{salt: bytes32(0)}();
+
+        // Verify same addresses
+        require(address(validatorA) == address(validatorB), "Validator contracts must have same address");
 
         // Use predeploy SuperchainTokenBridge addresses
         tokenBridgeA = SuperchainTokenBridge(PredeployAddresses.SUPERCHAIN_TOKEN_BRIDGE);
@@ -88,14 +104,16 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
 
         // Deploy CrosschainSwapper contracts
         vm.selectFork(forkIds[0]);
-        CrosschainSwapperA = new CrosschainSwapper{salt: bytes32(0)}(address(routerA), address(promiseA));
+        crosschainSwapperA =
+            new CrosschainSwapper{salt: bytes32(0)}(address(promiseCallbackA), address(routerA), address(validatorA));
 
         vm.selectFork(forkIds[1]);
-        CrosschainSwapperB = new CrosschainSwapper{salt: bytes32(0)}(address(routerB), address(promiseB));
+        crosschainSwapperB =
+            new CrosschainSwapper{salt: bytes32(0)}(address(promiseCallbackB), address(routerB), address(validatorB));
 
         // Verify same addresses
         require(
-            address(CrosschainSwapperA) == address(CrosschainSwapperB),
+            address(crosschainSwapperA) == address(crosschainSwapperB),
             "CrosschainSwapper contracts must have same address"
         );
 
@@ -182,11 +200,11 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
         vm.startPrank(user);
 
         // Approve tokens for CrosschainSwapper
-        tokenIn.approve(address(CrosschainSwapperA), swapAmount);
+        tokenIn.approve(address(crosschainSwapperA), swapAmount);
 
         // Call initSwap to start the cross-chain swap
         console.log("Calling initSwap on Chain A");
-        (bytes32 bridgePromiseId, bytes32 swapCallbackId, bytes32 bridgeBackCallbackId) = CrosschainSwapperA.initSwap(
+        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) = crosschainSwapperA.initSwap(
             chainIdByForkId[forkIds[1]], // Destination chain (Chain B)
             address(tokenIn), // Token to swap from
             address(tokenOut), // Token to swap to
@@ -198,9 +216,9 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
         vm.stopPrank();
 
         console.log("initSwap completed:");
-        console.log("  bridgePromiseId:", uint256(bridgePromiseId));
-        console.log("  swapCallbackId:", uint256(swapCallbackId));
-        console.log("  bridgeBackCallbackId:", uint256(bridgeBackCallbackId));
+        console.log("  bridgeId:", uint256(bridgeId));
+        console.log("  bridgeBackId:", uint256(bridgeBackId));
+        console.log("  bridgeBackOnErrorId:", uint256(bridgeBackOnErrorId));
         console.log("");
 
         // ========================================
@@ -214,41 +232,50 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 3: CHAIN B - RESOLVE CALLBACK TO EXECUTE RELAYSWAP
+        // PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP
         // ========================================
-        console.log("PHASE 3: CHAIN B - RESOLVE CALLBACK TO EXECUTE RELAYSWAP");
+        console.log("PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP");
 
         vm.selectFork(forkIds[1]);
 
-        // Check if swap callback can be resolved
-        if (CrosschainSwapperB.CALLBACK().canResolve(swapCallbackId)) {
-            console.log("Resolving swap callback on Chain B");
-            CrosschainSwapperB.CALLBACK().resolve(swapCallbackId);
-            console.log("Swap callback resolved - relaySwap executed");
+        // Check if bridge promise can be resolved
+        if (promiseCallbackB.canResolve(bridgeId)) {
+            console.log("Resolving bridge promise on Chain B");
+            promiseCallbackB.resolve(bridgeId);
+            console.log("Bridge promise resolved - relaySwap executed");
         } else {
-            console.log("Swap callback not ready for resolution");
+            console.log("Bridge promise not ready for resolution");
         }
-        console.log("CrosschainSwapper balance", tokenOut.balanceOf(address(CrosschainSwapperB)));
 
-        // ========================================
-        // PHASE 4: CHAIN B - RESOLVE CALLBACK TO EXECUTE BRIDGEBACK
-        // ========================================
-        console.log("PHASE 4: CHAIN B - RESOLVE CALLBACK TO EXECUTE BRIDGEBACK");
-
-        // Check if bridge back callback can be resolved
-        if (CrosschainSwapperB.CALLBACK().canResolve(bridgeBackCallbackId)) {
-            console.log("Resolving bridge back callback on Chain B");
-            CrosschainSwapperB.CALLBACK().resolve(bridgeBackCallbackId);
-            console.log("Bridge back callback resolved - bridgeBack executed");
-        } else {
-            console.log("Bridge back callback not ready for resolution");
-        }
+        // Check the status of the bridge promise
+        PromiseCallback.Promise memory bridgePromise = promiseCallbackB.getPromise(bridgeId);
+        console.log("Bridge promise status:", uint256(bridgePromise.status));
+        console.log("CrosschainSwapper tokenOut balance:", tokenOut.balanceOf(address(crosschainSwapperB)));
         console.log("");
 
         // ========================================
-        // PHASE 5: RELAY MESSAGES
+        // PHASE 4: CHAIN B - RESOLVE BRIDGE BACK PROMISE
         // ========================================
-        console.log("PHASE 5: RELAY MESSAGES");
+        console.log("PHASE 4: CHAIN B - RESOLVE BRIDGE BACK PROMISE");
+
+        // Check if bridge back promise can be resolved
+        if (promiseCallbackB.canResolve(bridgeBackId)) {
+            console.log("Resolving bridge back promise on Chain B");
+            promiseCallbackB.resolve(bridgeBackId);
+            console.log("Bridge back promise resolved - bridgeBack executed");
+        } else {
+            console.log("Bridge back promise not ready for resolution");
+        }
+
+        // Check the status of the bridge back promise
+        PromiseCallback.Promise memory bridgeBackPromise = promiseCallbackB.getPromise(bridgeBackId);
+        console.log("Bridge back promise status:", uint256(bridgeBackPromise.status));
+        console.log("");
+
+        // ========================================
+        // PHASE 5: RELAY FINAL MESSAGES
+        // ========================================
+        console.log("PHASE 5: RELAY FINAL MESSAGES");
         console.log("Relaying cross-chain messages from Chain B to Chain A");
 
         relayAllMessages();
@@ -296,5 +323,144 @@ contract CrosschainSwapperE2ETest is Test, Relayer {
         console.log("");
         console.log("SUCCESS: Cross-chain swap completed successfully!");
         console.log("Flow: TokenIn (A) -> Bridge -> TokenIn (B) -> Swap -> TokenOut (B) -> Bridge -> TokenOut (A)");
+    }
+
+    /// @notice Test cross-chain swap failure and error handling
+    /// @dev Flow: Chain A initSwap -> Chain B relaySwap (fails) -> Chain B bridgeBackOnError -> Chain A
+    function test_CrosschainSwapper_CrossChainSwap_Failure() public {
+        console.log("=== Testing CrosschainSwapper Cross-Chain Swap Failure ===");
+        console.log("Flow: Chain A initSwap -> Chain B relaySwap (fails) -> Chain B bridgeBackOnError -> Chain A");
+        console.log("");
+
+        // ========================================
+        // PHASE 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS
+        // ========================================
+        console.log("PHASE 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS");
+
+        vm.selectFork(forkIds[0]);
+        vm.startPrank(user);
+
+        // Approve tokens for CrosschainSwapper
+        tokenIn.approve(address(crosschainSwapperA), swapAmount);
+
+        // Call initSwap with impossibly high minAmountOut to trigger failure
+        uint256 impossibleMinAmountOut = 1000 ether; // Much higher than what the swap can provide
+        console.log("Calling initSwap on Chain A with impossibly high minAmountOut");
+        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) = crosschainSwapperA.initSwap(
+            chainIdByForkId[forkIds[1]], // Destination chain (Chain B)
+            address(tokenIn), // Token to swap from
+            address(tokenOut), // Token to swap to
+            swapAmount, // Amount to swap
+            impossibleMinAmountOut, // Impossibly high minimum amount out
+            user // Recipient
+        );
+
+        vm.stopPrank();
+
+        console.log("initSwap completed:");
+        console.log("  bridgeId:", uint256(bridgeId));
+        console.log("  bridgeBackId:", uint256(bridgeBackId));
+        console.log("  bridgeBackOnErrorId:", uint256(bridgeBackOnErrorId));
+        console.log("");
+
+        // ========================================
+        // PHASE 2: RELAY MESSAGES
+        // ========================================
+        console.log("PHASE 2: RELAY MESSAGES");
+        console.log("Relaying cross-chain messages from Chain A to Chain B");
+
+        relayAllMessages();
+        console.log("Messages relayed successfully");
+        console.log("");
+
+        // ========================================
+        // PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE (WILL FAIL)
+        // ========================================
+        console.log("PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE (WILL FAIL)");
+
+        vm.selectFork(forkIds[1]);
+
+        // Check if bridge promise can be resolved
+        if (promiseCallbackB.canResolve(bridgeId)) {
+            console.log("Resolving bridge promise on Chain B (expecting failure)");
+            promiseCallbackB.resolve(bridgeId);
+            console.log("Bridge promise resolved - relaySwap executed but should have failed");
+        } else {
+            console.log("Bridge promise not ready for resolution");
+        }
+
+        // Check the status of the bridge promise (should be rejected)
+        PromiseCallback.Promise memory bridgePromise = promiseCallbackB.getPromise(bridgeId);
+        console.log("Bridge promise status:", uint256(bridgePromise.status));
+        console.log("");
+
+        // ========================================
+        // PHASE 4: CHAIN B - RESOLVE ERROR HANDLER PROMISE
+        // ========================================
+        console.log("PHASE 4: CHAIN B - RESOLVE ERROR HANDLER PROMISE");
+
+        // Check if error handler promise can be resolved
+        if (promiseCallbackB.canResolve(bridgeBackOnErrorId)) {
+            console.log("Resolving error handler promise on Chain B");
+            promiseCallbackB.resolve(bridgeBackOnErrorId);
+            console.log("Error handler promise resolved - bridgeBackOnError executed");
+        } else {
+            console.log("Error handler promise not ready for resolution");
+        }
+
+        // Check the status of the error handler promise
+        PromiseCallback.Promise memory errorPromise = promiseCallbackB.getPromise(bridgeBackOnErrorId);
+        console.log("Error handler promise status:", uint256(errorPromise.status));
+        console.log("");
+
+        // ========================================
+        // PHASE 5: RELAY FINAL MESSAGES
+        // ========================================
+        console.log("PHASE 5: RELAY FINAL MESSAGES");
+        console.log("Relaying cross-chain messages from Chain B to Chain A");
+
+        relayAllMessages();
+        console.log("Final messages relayed successfully");
+
+        // Process the bridge message on Chain A to mint refund tokens
+        vm.selectFork(forkIds[0]);
+        console.log("Processing bridge message on Chain A");
+        relayAllMessages();
+        console.log("");
+
+        // ========================================
+        // PHASE 6: VERIFICATION
+        // ========================================
+        console.log("PHASE 6: VERIFICATION");
+
+        // Verify final balances on Chain A (should be refunded)
+        vm.selectFork(forkIds[0]);
+        uint256 finalTokenInBalanceA = tokenIn.balanceOf(user);
+        uint256 finalTokenOutBalanceA = tokenOut.balanceOf(user);
+
+        console.log("Chain A - TokenIn balance change:", int256(finalTokenInBalanceA) - int256(initialTokenInBalanceA));
+        console.log(
+            "Chain A - TokenOut balance change:", int256(finalTokenOutBalanceA) - int256(initialTokenOutBalanceA)
+        );
+
+        // Verify final balances on Chain B
+        vm.selectFork(forkIds[1]);
+        uint256 finalTokenInBalanceB = tokenIn.balanceOf(user);
+        uint256 finalTokenOutBalanceB = tokenOut.balanceOf(user);
+
+        console.log("Chain B - TokenIn balance:", finalTokenInBalanceB);
+        console.log("Chain B - TokenOut balance:", finalTokenOutBalanceB);
+
+        // Verify refund conditions
+        assertEq(
+            finalTokenInBalanceA, initialTokenInBalanceA, "TokenIn on Chain A should be refunded (same as initial)"
+        );
+        assertEq(finalTokenOutBalanceA, initialTokenOutBalanceA, "TokenOut on Chain A should be unchanged");
+        assertEq(finalTokenInBalanceB, 0, "TokenIn on Chain B should be 0");
+        assertEq(finalTokenOutBalanceB, 0, "TokenOut on Chain B should be 0");
+
+        console.log("");
+        console.log("SUCCESS: Cross-chain swap failure handled correctly with refund!");
+        console.log("Flow: TokenIn (A) -> Bridge -> TokenIn (B) -> Swap (fail) -> TokenIn (B) -> Bridge -> TokenIn (A)");
     }
 }
