@@ -25,7 +25,6 @@ contract CrosschainSwapper {
 
     UnifiedCallback public immutable CALLBACK;
     address public immutable ROUTER;
-    mapping(bytes32 promiseData => bool isAllowed) public allowedPromises;
 
     constructor(address _router, address _promise) {
         if (_router == address(0)) revert CrosschainSwapper__InvalidRouter();
@@ -50,23 +49,13 @@ contract CrosschainSwapper {
         bytes32 sendERC20MessageHash =
             SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
 
-        // Calculate promise promise data
-        bytes memory promiseData =
-            _encodePromiseData(sendERC20MessageHash, tokenIn, tokenOut, amountIn, minAmountOut, recipient);
-        // Register promise promise data to allow swap on destination chain
-        bytes memory registerPromiseDataMessage =
-            abi.encodeWithSelector(this.registerPromiseData.selector, keccak256(promiseData));
-        bytes32 registerPromiseDataMessageHash =
-            MESSENGER.sendMessage(destinationId, address(this), registerPromiseDataMessage);
-
         // Create promise for this bridge operation
         bridgePromiseId = PROMISE.create();
 
         // Create hybrid callback to execute swap on destination chain when bridge promise resolves AND CDM message succeeds
         // This eliminates the redundant manual CDM check while preserving promise data transfer
-        bytes32[] memory cdmHashes = new bytes32[](2);
+        bytes32[] memory cdmHashes = new bytes32[](1);
         cdmHashes[0] = sendERC20MessageHash;
-        cdmHashes[1] = registerPromiseDataMessageHash;
         swapCallbackId =
             CALLBACK.thenOnWithCDM(destinationId, bridgePromiseId, address(this), this.relaySwap.selector, cdmHashes);
 
@@ -74,6 +63,8 @@ contract CrosschainSwapper {
         bridgeBackCallbackId = CALLBACK.thenOn(destinationId, swapCallbackId, address(this), this.bridgeBack.selector);
         CALLBACK.catchErrorOn(destinationId, swapCallbackId, address(this), this.bridgeBackOnError.selector);
 
+        // Calculate promise promise data
+        bytes memory promiseData = abi.encode(tokenIn, tokenOut, amountIn, minAmountOut, recipient, block.chainid);
         // Resolve promise with bridge data and share to destination
         PROMISE.resolve(bridgePromiseId, promiseData);
         PROMISE.shareResolvedPromise(destinationId, bridgePromiseId);
@@ -81,23 +72,19 @@ contract CrosschainSwapper {
 
     function relaySwap(bytes memory data)
         external
-        returns (bytes32 msgHash, address finalToken, uint256 finalAmount, address recipient, uint256 destinationId)
+        returns (address finalToken, uint256 finalAmount, address recipient, uint256 destinationId)
     {
         if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
 
         (
-            /*bytes32 msgHash*/
-            ,
             address tokenIn,
             address tokenOut,
             uint256 amountIn,
             uint256 minAmountOut,
             address recipientAddr,
             uint256 destId
-        ) = abi.decode(data, (bytes32, address, address, uint256, uint256, address, uint256));
-
-        require(allowedPromises[keccak256(data)], "CrosschainSwapper: promise data not allowed");
-        // CDM success is guaranteed by UnifiedCallback's thenOnWithCDM - no need for manual check
+        ) = abi.decode(data, (address, address, uint256, uint256, address, uint256));
 
         // Approve tokens for MockExchange
         ISuperchainERC20(tokenIn).approve(ROUTER, amountIn);
@@ -118,19 +105,15 @@ contract CrosschainSwapper {
             revert CrosschainSwapper__SwapFailed(tokenIn, amountIn, recipientAddr, destId);
         }
 
-        bytes32 promiseData = keccak256(abi.encode(msgHash, tokenOut, amountOut, recipientAddr, destId));
-        allowedPromises[promiseData] = true;
-        emit PromiseDataRegistered(promiseData);
-
-        return (msgHash, tokenOut, amountOut, recipientAddr, destId);
+        return (tokenOut, amountOut, recipientAddr, destId);
     }
 
     function bridgeBack(bytes memory data) external returns (bytes32 messageHash) {
         if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        require(allowedPromises[keccak256(data)], "CrosschainSwapper: promise data not allowed");
+        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
 
-        ( /*bytes32 msgHash*/ , address token, uint256 amountOut, address recipient, uint256 destinationId) =
-            abi.decode(data, (bytes32, address, uint256, address, uint256));
+        (address token, uint256 amountOut, address recipient, uint256 destinationId) =
+            abi.decode(data, (address, uint256, address, uint256));
 
         // Bridge the swapped tokens back to original chain
         messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(token, recipient, amountOut, destinationId);
@@ -138,7 +121,7 @@ contract CrosschainSwapper {
 
     function bridgeBackOnError(bytes memory data) external returns (bytes32 messageHash) {
         if (msg.sender != address(CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-
+        if (CALLBACK.callbackRegistrant() != address(this)) revert CrosschainSwapper__InvalidCallback();
         // Parse error data to extract original bridge information for refund
         // The error data contains the revert reason from relaySwap
         if (data.length >= 4) {
@@ -148,14 +131,18 @@ contract CrosschainSwapper {
             }
 
             if (errorSelector == CrosschainSwapper__SwapFailed.selector) {
-                // Decode the error parameters to get refund information
-                (, bytes32 msgHash, address tokenIn, uint256 amountIn, address recipient, uint256 destinationId) =
-                    abi.decode(data, (bytes4, bytes32, address, uint256, address, uint256));
+                // Extract the error parameters by skipping the first 4 bytes (error selector)
+                bytes memory errorData = new bytes(data.length - 4);
+                assembly {
+                    let src := add(data, 0x24) // skip 32 bytes (length) + 4 bytes (selector)
+                    let dst := add(errorData, 0x20) // skip 32 bytes (length)
+                    let len := sub(mload(data), 4) // data length - 4 bytes
+                    let success := call(gas(), 0x4, 0, src, len, dst, len) // copy using identity precompile
+                }
 
-                require(
-                    allowedPromises[keccak256(abi.encode(msgHash, tokenIn, amountIn, recipient, destinationId))],
-                    "CrosschainSwapper: promise data not allowed"
-                );
+                // Decode the error parameters to get refund information
+                (address tokenIn, uint256 amountIn, address recipient, uint256 destinationId) =
+                    abi.decode(errorData, (address, uint256, address, uint256));
 
                 // Bridge back the original tokens as a refund
                 messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, recipient, amountIn, destinationId);
@@ -163,27 +150,5 @@ contract CrosschainSwapper {
         }
 
         return bytes32(0);
-    }
-
-    function registerPromiseData(bytes32 _promiseData) external {
-        require(msg.sender == address(MESSENGER), "CrosschainSwapper: only callable by Messenger");
-        require(
-            MESSENGER.crossDomainMessageSender() == address(this),
-            "CrosschainSwapper: only callable by CrosschainSwapper contract"
-        );
-
-        allowedPromises[_promiseData] = true;
-        emit PromiseDataRegistered(_promiseData);
-    }
-
-    function _encodePromiseData(
-        bytes32 messageHash,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 minAmountOut,
-        address recipient
-    ) private view returns (bytes memory) {
-        return abi.encode(messageHash, tokenIn, tokenOut, amountIn, minAmountOut, recipient, block.chainid);
     }
 }
