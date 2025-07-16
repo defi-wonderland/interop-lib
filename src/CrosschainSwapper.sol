@@ -8,24 +8,15 @@ import {ISuperchainTokenBridge} from "./interfaces/ISuperchainTokenBridge.sol";
 import {IL2ToL2CrossDomainMessenger} from "./interfaces/IL2ToL2CrossDomainMessenger.sol";
 import {ISuperchainERC20} from "./interfaces/ISuperchainERC20.sol";
 import {IValidator} from "./interfaces/IValidator.sol";
+import {IPromiseCallback} from "./interfaces/IPromiseCallback.sol";
 
 contract CrosschainSwapper {
-    using PromiseLib for PromiseCallback;
-
-    struct SwapParams {
-        address tokenIn;
-        address tokenOut;
-        uint256 amountIn;
-        uint256 minAmountOut;
-        address recipient;
-        uint256 destinationId;
-    }
+    using PromiseLib for IPromiseCallback;
 
     error CrosschainSwapper__SwapFailed(address tokenIn, uint256 amountIn, address recipient, uint256 destinationId);
-    error CrosschainSwapper__InvalidRouter();
-    error CrosschainSwapper__InvalidCallback();
-    error CrosschainSwapper__InvalidPromiseCallback();
     error CrosschainSwapper__InvalidCreator();
+    error CrosschainSwapper__InvalidCallback();
+    error CrosschainSwapper__ZeroAddress();
 
     event PromiseDataRegistered(bytes32 promiseData);
 
@@ -35,19 +26,27 @@ contract CrosschainSwapper {
     IL2ToL2CrossDomainMessenger constant MESSENGER =
         IL2ToL2CrossDomainMessenger(PredeployAddresses.L2_TO_L2_CROSS_DOMAIN_MESSENGER);
 
-    PromiseCallback public immutable PROMISE_CALLBACK;
+    IPromiseCallback public immutable PROMISE_CALLBACK;
     address public immutable ROUTER;
     IValidator public immutable VALIDATOR;
 
     constructor(address _promiseCallback, address _router, address _validator) {
-        if (_router == address(0)) revert CrosschainSwapper__InvalidRouter();
-        if (_promiseCallback == address(0)) revert CrosschainSwapper__InvalidPromiseCallback();
+        if (_router == address(0)) revert CrosschainSwapper__ZeroAddress();
+        if (_promiseCallback == address(0)) revert CrosschainSwapper__ZeroAddress();
+        if (_validator == address(0)) revert CrosschainSwapper__ZeroAddress();
 
-        PROMISE_CALLBACK = PromiseCallback(_promiseCallback);
+        PROMISE_CALLBACK = IPromiseCallback(_promiseCallback);
         ROUTER = _router;
         VALIDATOR = IValidator(_validator);
     }
 
+    /// @notice Initialize a cross-chain swap
+    /// @param destinationId The destination chain ID
+    /// @param tokenIn The input token address
+    /// @param tokenOut The output token address
+    /// @param amountIn The amount of input tokens to swap
+    /// @param minAmountOut The minimum amount of output tokens required
+    /// @param recipient The recipient address on the destination chain
     function initSwap(
         uint256 destinationId,
         address tokenIn,
@@ -60,27 +59,36 @@ contract CrosschainSwapper {
         ISuperchainERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
         // Send tokens to destination chain
-        bytes32 sendERC20MessageHash =
-            SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
+        bytes32[] memory msgHashes = new bytes32[](1);
+        msgHashes[0] = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, address(this), amountIn, destinationId);
 
         // Create promise for bridge to destination chain
-        SwapParams memory params = SwapParams({
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
-            amountIn: amountIn,
-            minAmountOut: minAmountOut,
-            recipient: recipient,
-            destinationId: destinationId
-        });
-        bridgeId = _createBridgePromise(sendERC20MessageHash, params);
+        bridgeId = PROMISE_CALLBACK.createAutoOn(
+            destinationId,
+            address(this),
+            abi.encodeCall(this.relaySwap, (tokenIn, tokenOut, amountIn, minAmountOut, recipient, block.chainid)),
+            VALIDATOR,
+            abi.encode(msgHashes)
+        );
 
         // Attach then to bridge promise
         bridgeBackId = PROMISE_CALLBACK.thenOn(bridgeId, destinationId, address(this), this.bridgeBack.selector);
         // Attach catch to bridge promise
-        bridgeBackOnErrorId =
-            PROMISE_CALLBACK.catchErrorOn(bridgeId, destinationId, address(this), this.bridgeBackOnError.selector);
+        bridgeBackOnErrorId = PROMISE_CALLBACK.catchErrorOn(
+            bridgeId,
+            destinationId,
+            address(this),
+            abi.encodeCall(this.bridgeBack, abi.encode(tokenIn, amountIn, recipient, block.chainid))
+        );
     }
 
+    /// @notice Relay a swap in the destination chain
+    /// @param tokenIn The input token address
+    /// @param tokenOut The output token address
+    /// @param amountIn The amount of input tokens to swap
+    /// @param minAmountOut The minimum amount of output tokens required
+    /// @param recipient The recipient address on the destination chain
+    /// @param destinationId The destination chain ID
     function relaySwap(
         address tokenIn,
         address tokenOut,
@@ -115,6 +123,9 @@ contract CrosschainSwapper {
         return (tokenOut, amountOut, recipient, destinationId);
     }
 
+    /// @notice Bridge tokens back after successful swap (accepts encoded data)
+    /// @param data Encoded bridge parameters from relaySwap
+    /// @return messageHash The CDM message hash
     function bridgeBack(bytes memory data) external returns (bytes32 messageHash) {
         if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
         (address creator,) = PROMISE_CALLBACK.executionContext();
@@ -125,62 +136,5 @@ contract CrosschainSwapper {
 
         // Bridge the swapped tokens back to original chain
         messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(token, recipient, amountOut, destinationId);
-    }
-
-    function bridgeBackOnError(bytes memory data) external returns (bytes32 messageHash) {
-        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        (address creator,) = PROMISE_CALLBACK.executionContext();
-        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
-
-        // Parse error data to extract original bridge information for refund
-        // The error data contains the revert reason from relaySwap
-        if (data.length >= 4) {
-            bytes4 errorSelector;
-            assembly {
-                errorSelector := mload(add(data, 0x20))
-            }
-
-            if (errorSelector == CrosschainSwapper__SwapFailed.selector) {
-                // Extract the error parameters by skipping the first 4 bytes (error selector)
-                bytes memory errorData = new bytes(data.length - 4);
-                assembly {
-                    let src := add(data, 0x24) // skip 32 bytes (length) + 4 bytes (selector)
-                    let dst := add(errorData, 0x20) // skip 32 bytes (length)
-                    let len := sub(mload(data), 4) // data length - 4 bytes
-                    let success := call(gas(), 0x4, 0, src, len, dst, len) // copy using identity precompile
-                }
-
-                // Decode the error parameters to get refund information
-                (address tokenIn, uint256 amountIn, address recipient, uint256 destinationId) =
-                    abi.decode(errorData, (address, uint256, address, uint256));
-
-                // Bridge back the original tokens as a refund
-                messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(tokenIn, recipient, amountIn, destinationId);
-            }
-        }
-
-        return bytes32(0);
-    }
-
-    function _createBridgePromise(bytes32 sendERC20MessageHash, SwapParams memory params)
-        private
-        returns (bytes32 bridgeId)
-    {
-        bytes32[] memory msgHashes = new bytes32[](1);
-        msgHashes[0] = sendERC20MessageHash;
-
-        bridgeId = PROMISE_CALLBACK.create(
-            address(this), // resolver
-            bytes32(0), // parent promise id
-            PromiseCallback.DependencyType.None, // dependency type
-            address(this), // target
-            abi.encodeCall(
-                this.relaySwap,
-                (params.tokenIn, params.tokenOut, params.amountIn, params.minAmountOut, params.recipient, block.chainid)
-            ), // execution data
-            VALIDATOR, // validator
-            abi.encode(msgHashes), // validation data
-            params.destinationId
-        );
     }
 }
