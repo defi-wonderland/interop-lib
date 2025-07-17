@@ -19,6 +19,7 @@ contract CrosschainSwapper {
     error CrosschainSwapper__ZeroAddress();
 
     event PromiseDataRegistered(bytes32 promiseData);
+    event SuccessBridgeBack();
 
     ISuperchainTokenBridge constant SUPERCHAIN_TOKEN_BRIDGE =
         ISuperchainTokenBridge(PredeployAddresses.SUPERCHAIN_TOKEN_BRIDGE);
@@ -40,6 +41,13 @@ contract CrosschainSwapper {
         VALIDATOR = IValidator(_validator);
     }
 
+    modifier onlyPromiseCallback() {
+        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
+        (address creator,) = PROMISE_CALLBACK.executionContext();
+        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
+        _;
+    }
+
     /// @notice Initialize a cross-chain swap
     /// @param destinationId The destination chain ID
     /// @param tokenIn The input token address
@@ -54,7 +62,10 @@ contract CrosschainSwapper {
         uint256 amountIn,
         uint256 minAmountOut,
         address recipient
-    ) external returns (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) {
+    )
+        external
+        returns (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId, bytes32 afterBridgeBackId)
+    {
         // transfer tokens from user to this contract
         ISuperchainERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
@@ -80,6 +91,10 @@ contract CrosschainSwapper {
             address(this),
             abi.encodeCall(this.bridgeBack, abi.encode(tokenIn, amountIn, recipient, block.chainid))
         );
+
+        afterBridgeBackId = PROMISE_CALLBACK.then(
+            bridgeBackId, address(this), abi.encodeCall(this.successBridgeBack, ()), VALIDATOR, bytes("")
+        );
     }
 
     /// @notice Relay a swap in the destination chain
@@ -96,11 +111,11 @@ contract CrosschainSwapper {
         uint256 minAmountOut,
         address recipient,
         uint256 destinationId
-    ) external returns (address finalToken, uint256 finalAmount, address finalRecipient, uint256 finalDestinationId) {
-        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        (address creator,) = PROMISE_CALLBACK.executionContext();
-        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
-
+    )
+        external
+        onlyPromiseCallback
+        returns (address finalToken, uint256 finalAmount, address finalRecipient, uint256 finalDestinationId)
+    {
         // Approve tokens for MockExchange
         ISuperchainERC20(tokenIn).approve(ROUTER, amountIn);
 
@@ -125,16 +140,18 @@ contract CrosschainSwapper {
 
     /// @notice Bridge tokens back after successful swap (accepts encoded data)
     /// @param data Encoded bridge parameters from relaySwap
-    /// @return messageHash The CDM message hash
-    function bridgeBack(bytes memory data) external returns (bytes32 messageHash) {
-        if (msg.sender != address(PROMISE_CALLBACK)) revert CrosschainSwapper__InvalidCallback();
-        (address creator,) = PROMISE_CALLBACK.executionContext();
-        if (creator != address(this)) revert CrosschainSwapper__InvalidCreator();
-
+    /// @return msgHashes The encoded CDM message hashes
+    function bridgeBack(bytes memory data) external onlyPromiseCallback returns (bytes32[] memory msgHashes) {
         (address token, uint256 amountOut, address recipient, uint256 destinationId) =
             abi.decode(data, (address, uint256, address, uint256));
 
         // Bridge the swapped tokens back to original chain
-        messageHash = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(token, recipient, amountOut, destinationId);
+        msgHashes = new bytes32[](1);
+        msgHashes[0] = SUPERCHAIN_TOKEN_BRIDGE.sendERC20(token, recipient, amountOut, destinationId);
+    }
+
+    /// @notice Callback function to emit event when bridge back is successful
+    function successBridgeBack() external onlyPromiseCallback {
+        emit SuccessBridgeBack();
     }
 }

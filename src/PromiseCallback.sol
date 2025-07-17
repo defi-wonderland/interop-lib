@@ -270,7 +270,9 @@ contract PromiseCallback is IResolvable {
 
         // Check validator if specified
         if (address(promiseData.validator) != address(0)) {
-            try promiseData.validator.canResolve(promiseData.validationData) returns (bool validated) {
+            bytes memory validationData =
+                _prepareValidationCallData(promiseData.validationData, promiseData.parentPromiseId);
+            try promiseData.validator.canResolve(validationData) returns (bool validated) {
                 return validated;
             } catch {
                 return false; // Validator failed
@@ -278,6 +280,22 @@ contract PromiseCallback is IResolvable {
         }
 
         return true;
+    }
+
+    /// @notice Internal function to prepare validation call data
+    /// @dev If validationData is empty and has parent promise, use parent return data
+    /// @param validationData The validation data
+    /// @param parentPromiseId The parent promise ID
+    /// @return validationCallData The prepared validation call data
+    function _prepareValidationCallData(bytes memory validationData, bytes32 parentPromiseId)
+        internal
+        view
+        returns (bytes memory validationCallData)
+    {
+        if (validationData.length == 0 && parentPromiseId != bytes32(0)) {
+            return promises[parentPromiseId].returnData;
+        }
+        return validationData;
     }
 
     /// @notice Internal function to prepare call data for promise execution

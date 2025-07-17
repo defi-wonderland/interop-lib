@@ -9,6 +9,7 @@ import {CrosschainSwapper} from "src/CrosschainSwapper.sol";
 import {Validator} from "src/Validator.sol";
 import {SuperchainTokenBridge} from "src/SuperchainTokenBridge.sol";
 import {PredeployAddresses} from "src/libraries/PredeployAddresses.sol";
+import {IL2ToL2CrossDomainMessenger} from "src/interfaces/IL2ToL2CrossDomainMessenger.sol";
 
 // Import mock contracts
 import {MockSuperchainERC20} from "test/examples/utils/MockSuperchainERC20.sol";
@@ -204,7 +205,8 @@ contract BridgeSwapBridgeTest is Test, Relayer {
 
         // Call initSwap to start the cross-chain swap
         console.log("Calling initSwap on Chain A");
-        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) = crosschainSwapperA.initSwap(
+        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId, bytes32 afterBridgeBackId) =
+        crosschainSwapperA.initSwap(
             chainIdByForkId[forkIds[1]], // Destination chain (Chain B)
             address(tokenIn), // Token to swap from
             address(tokenOut), // Token to swap to
@@ -219,6 +221,7 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("  bridgeId:", uint256(bridgeId));
         console.log("  bridgeBackId:", uint256(bridgeBackId));
         console.log("  bridgeBackOnErrorId:", uint256(bridgeBackOnErrorId));
+        console.log("  afterBridgeBackId:", uint256(afterBridgeBackId));
         console.log("");
 
         // ========================================
@@ -288,9 +291,45 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 6: VERIFICATION
+        // PHASE 6: SHARE RESOLVED BRIDGE BACK PROMISE TO CHAIN A
         // ========================================
-        console.log("PHASE 6: VERIFICATION");
+        console.log("PHASE 6: SHARE RESOLVED BRIDGE BACK PROMISE TO CHAIN A");
+
+        // Switch back to Chain B to share the resolved bridgeBackId promise
+        vm.selectFork(forkIds[1]);
+        console.log("Sharing resolved bridgeBackId promise from Chain B to Chain A");
+        promiseCallbackB.sharePromise(chainIdByForkId[forkIds[0]], bridgeBackId);
+        console.log("Bridge back promise shared successfully");
+
+        // Relay the share message to Chain A
+        relayAllMessages();
+        console.log("Share message relayed to Chain A");
+
+        // ========================================
+        // PHASE 7: CHAIN A - RESOLVE AFTER BRIDGE BACK PROMISE
+        // ========================================
+        console.log("PHASE 7: CHAIN A - RESOLVE AFTER BRIDGE BACK PROMISE");
+
+        vm.selectFork(forkIds[0]);
+
+        // Check if afterBridgeBackId promise can be resolved
+        if (promiseCallbackA.canResolve(afterBridgeBackId)) {
+            console.log("Resolving afterBridgeBackId promise on Chain A");
+            promiseCallbackA.resolve(afterBridgeBackId);
+            console.log("After bridge back promise resolved successfully");
+        } else {
+            console.log("After bridge back promise not ready for resolution");
+        }
+
+        // Check the status of the after bridge back promise
+        PromiseCallback.Promise memory afterBridgeBackPromise = promiseCallbackA.getPromise(afterBridgeBackId);
+        console.log("After bridge back promise status:", uint256(afterBridgeBackPromise.status));
+        console.log("");
+
+        // ========================================
+        // PHASE 8: VERIFICATION
+        // ========================================
+        console.log("PHASE 8: VERIFICATION");
 
         // Verify final balances on Chain A
         vm.selectFork(forkIds[0]);
@@ -346,7 +385,8 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         // Call initSwap with impossibly high minAmountOut to trigger failure
         uint256 impossibleMinAmountOut = 1000 ether; // Much higher than what the swap can provide
         console.log("Calling initSwap on Chain A with impossibly high minAmountOut");
-        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId) = crosschainSwapperA.initSwap(
+        (bytes32 bridgeId, bytes32 bridgeBackId, bytes32 bridgeBackOnErrorId, bytes32 afterBridgeBackId) =
+        crosschainSwapperA.initSwap(
             chainIdByForkId[forkIds[1]], // Destination chain (Chain B)
             address(tokenIn), // Token to swap from
             address(tokenOut), // Token to swap to
