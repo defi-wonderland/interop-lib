@@ -110,11 +110,6 @@ contract PromiseCallback is IResolvable {
         bytes calldata validationData,
         uint256 destinationChain
     ) external returns (bytes32 promiseId) {
-        // Validate execution data if target is provided
-        if (target != address(0)) {
-            require(executionData.length >= 4, "PromiseCallback: execution data too short");
-        }
-
         // Use current chain if not specified
         if (destinationChain == 0) {
             destinationChain = block.chainid;
@@ -161,16 +156,9 @@ contract PromiseCallback is IResolvable {
         bytes memory validationData,
         uint256 destinationChain
     ) internal returns (bytes32) {
-        require(destinationChain != 0, "PromiseCallback: destination chain cannot be 0");
-
         // Generate ID if not specified
-        if (promiseId == bytes32(0)) {
-            uint256 currentNonce = nonce++;
-            promiseId = generateGlobalPromiseId(bytes32(currentNonce));
-        }
-
-        // Add existence check before creating
-        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
+        uint256 currentNonce = nonce++;
+        promiseId = generateGlobalPromiseId(bytes32(currentNonce));
 
         // Handle cross-chain creation
         if (destinationChain != block.chainid) {
@@ -289,22 +277,13 @@ contract PromiseCallback is IResolvable {
         view
         returns (bytes memory executeCallData)
     {
-        if (executionData.length == 4) {
-            // Selector-only mode (4 bytes)
-            if (parentPromiseId != bytes32(0)) {
-                // Has parent - selector + parent data
-                Promise storage parent = promises[parentPromiseId];
-                bytes4 selector = bytes4(executionData);
-                executeCallData = abi.encodeWithSelector(selector, parent.returnData);
-            } else {
-                // No parent - just the selector (no parameters)
-                executeCallData = executionData; // Direct 4-byte copy
-            }
-        } else if (executionData.length > 4) {
-            // Full calldata mode (>4 bytes) - use as-is, ignore parent
-            executeCallData = executionData;
+        if (executionData.length == 4 && parentPromiseId != bytes32(0)) {
+            // Has parent - selector + parent data
+            Promise storage parent = promises[parentPromiseId];
+            bytes4 selector = bytes4(executionData);
+            executeCallData = abi.encodeWithSelector(selector, parent.returnData);
         } else {
-            revert("PromiseCallback: invalid execution data length");
+            executeCallData = executionData;
         }
     }
 
