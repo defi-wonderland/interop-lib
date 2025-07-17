@@ -21,7 +21,8 @@ contract Validator is IValidator {
         bytes32[] memory messageHashes = abi.decode(validationData, (bytes32[]));
 
         // Check if all message hashes were successful
-        for (uint256 i = 0; i < messageHashes.length; i++) {
+        uint256 length = messageHashes.length;
+        for (uint256 i; i < length; i++) {
             if (!MESSENGER.successfulMessages(messageHashes[i])) {
                 return false;
             }
