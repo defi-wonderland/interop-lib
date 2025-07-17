@@ -153,18 +153,6 @@ contract BridgeSwapBridgeTest is Test, Relayer {
 
         // Transfer tokens to user and liquidity provider
         tokenIn.transfer(user, 1000 ether); // User gets input tokens
-        tokenOut.transfer(liquidityProvider, 20000 ether); // LP gets output tokens for liquidity
-        tokenIn.transfer(liquidityProvider, 10000 ether); // LP gets input tokens for liquidity
-
-        // Setup Chain A router liquidity (for potential future operations)
-        vm.startPrank(liquidityProvider);
-        tokenIn.approve(address(routerA), 5000 ether);
-        tokenOut.approve(address(routerA), 5000 ether);
-        routerA.provideLiquidity(address(tokenIn), 5000 ether);
-        routerA.provideLiquidity(address(tokenOut), 5000 ether);
-        routerA.addPair(address(tokenIn), address(tokenOut), 10000); // 1:1 rate
-        routerA.addPair(address(tokenOut), address(tokenIn), 10000); // Reverse pair
-        vm.stopPrank();
 
         // Chain B setup
         vm.selectFork(forkIds[1]);
@@ -192,9 +180,9 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 1: CHAIN A - USER CALLS INIT SWAP
+        // STEP 1: CHAIN A - USER CALLS INIT SWAP
         // ========================================
-        console.log("PHASE 1: CHAIN A - USER CALLS INIT SWAP");
+        console.log("STEP 1: CHAIN A - USER CALLS INIT SWAP");
 
         vm.selectFork(forkIds[0]);
         vm.startPrank(user);
@@ -221,31 +209,18 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("  bridgeBackOnErrorId:", uint256(bridgeBackOnErrorId));
         console.log("");
 
-        // ========================================
-        // PHASE 2: RELAY MESSAGES
-        // ========================================
-        console.log("PHASE 2: RELAY MESSAGES");
-        console.log("Relaying cross-chain messages from Chain A to Chain B");
-
         relayAllMessages();
-        console.log("Messages relayed successfully");
-        console.log("");
 
         // ========================================
-        // PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP
+        // STEP 2: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP
         // ========================================
-        console.log("PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP");
+        console.log("STEP 2: CHAIN B - RESOLVE BRIDGE PROMISE TO EXECUTE RELAYSWAP");
 
         vm.selectFork(forkIds[1]);
 
         // Check if bridge promise can be resolved
-        if (promiseCallbackB.canResolve(bridgeId)) {
-            console.log("Resolving bridge promise on Chain B");
-            promiseCallbackB.resolve(bridgeId);
-            console.log("Bridge promise resolved - relaySwap executed");
-        } else {
-            console.log("Bridge promise not ready for resolution");
-        }
+        require(promiseCallbackB.canResolve(bridgeId), "Bridge promise not ready for resolution");
+        promiseCallbackB.resolve(bridgeId);
 
         // Check the status of the bridge promise
         PromiseCallback.Promise memory bridgePromise = promiseCallbackB.getPromise(bridgeId);
@@ -254,61 +229,41 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 4: CHAIN B - RESOLVE BRIDGE BACK PROMISE
+        // STEP 3: CHAIN B - RESOLVE BRIDGE BACK PROMISE
         // ========================================
-        console.log("PHASE 4: CHAIN B - RESOLVE BRIDGE BACK PROMISE");
+        console.log("STEP 3: CHAIN B - RESOLVE BRIDGE BACK PROMISE");
 
         // Check if bridge back promise can be resolved
-        if (promiseCallbackB.canResolve(bridgeBackId)) {
-            console.log("Resolving bridge back promise on Chain B");
-            promiseCallbackB.resolve(bridgeBackId);
-            console.log("Bridge back promise resolved - bridgeBack executed");
-        } else {
-            console.log("Bridge back promise not ready for resolution");
-        }
+        require(promiseCallbackB.canResolve(bridgeBackId), "Bridge back promise not ready for resolution");
+        promiseCallbackB.resolve(bridgeBackId);
 
         // Check the status of the bridge back promise
         PromiseCallback.Promise memory bridgeBackPromise = promiseCallbackB.getPromise(bridgeBackId);
         console.log("Bridge back promise status:", uint256(bridgeBackPromise.status));
         console.log("");
 
-        // ========================================
-        // PHASE 5: RELAY FINAL MESSAGES
-        // ========================================
-        console.log("PHASE 5: RELAY FINAL MESSAGES");
-        console.log("Relaying cross-chain messages from Chain B to Chain A");
-
         relayAllMessages();
-        console.log("Final messages relayed successfully");
-
-        // Process the bridge message on Chain A to mint tokens
-        vm.selectFork(forkIds[0]);
-        console.log("Processing bridge message on Chain A");
-        relayAllMessages();
-        console.log("");
 
         // ========================================
-        // PHASE 6: VERIFICATION
+        // STEP 4: VERIFICATION
         // ========================================
-        console.log("PHASE 6: VERIFICATION");
+        console.log("STEP 4: VERIFICATION");
 
         // Verify final balances on Chain A
         vm.selectFork(forkIds[0]);
         uint256 finalTokenInBalanceA = tokenIn.balanceOf(user);
         uint256 finalTokenOutBalanceA = tokenOut.balanceOf(user);
 
-        console.log("Chain A - TokenIn balance change:", int256(finalTokenInBalanceA) - int256(initialTokenInBalanceA));
-        console.log(
-            "Chain A - TokenOut balance change:", int256(finalTokenOutBalanceA) - int256(initialTokenOutBalanceA)
-        );
-
         // Verify final balances on Chain B
         vm.selectFork(forkIds[1]);
         uint256 finalTokenInBalanceB = tokenIn.balanceOf(user);
         uint256 finalTokenOutBalanceB = tokenOut.balanceOf(user);
 
-        console.log("Chain B - TokenIn balance:", finalTokenInBalanceB);
-        console.log("Chain B - TokenOut balance:", finalTokenOutBalanceB);
+        // token balance change
+        console.log("Chain A - TokenIn balance change:", int256(finalTokenInBalanceA) - int256(initialTokenInBalanceA));
+        console.log(
+            "Chain A - TokenOut balance change:", int256(finalTokenOutBalanceA) - int256(initialTokenOutBalanceA)
+        );
 
         // Verify success conditions
         assertEq(
@@ -320,9 +275,7 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         assertEq(finalTokenInBalanceB, 0, "TokenIn on Chain B should be 0 (swapped)");
         assertEq(finalTokenOutBalanceB, 0, "TokenOut on Chain B should be 0 (bridged back)");
 
-        console.log("");
         console.log("SUCCESS: Cross-chain swap completed successfully!");
-        console.log("Flow: TokenIn (A) -> Bridge -> TokenIn (B) -> Swap -> TokenOut (B) -> Bridge -> TokenOut (A)");
     }
 
     /// @notice Test cross-chain swap failure and error handling
@@ -333,9 +286,9 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS
+        // STEP 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS
         // ========================================
-        console.log("PHASE 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS");
+        console.log("STEP 1: CHAIN A - USER CALLS INIT SWAP WITH INVALID PARAMETERS");
 
         vm.selectFork(forkIds[0]);
         vm.startPrank(user);
@@ -363,31 +316,18 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("  bridgeBackOnErrorId:", uint256(bridgeBackOnErrorId));
         console.log("");
 
-        // ========================================
-        // PHASE 2: RELAY MESSAGES
-        // ========================================
-        console.log("PHASE 2: RELAY MESSAGES");
-        console.log("Relaying cross-chain messages from Chain A to Chain B");
-
         relayAllMessages();
-        console.log("Messages relayed successfully");
-        console.log("");
 
         // ========================================
-        // PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE (WILL FAIL)
+        // STEP 2: CHAIN B - RESOLVE BRIDGE PROMISE
         // ========================================
-        console.log("PHASE 3: CHAIN B - RESOLVE BRIDGE PROMISE (WILL FAIL)");
+        console.log("STEP 3: CHAIN B - RESOLVE BRIDGE PROMISE");
 
         vm.selectFork(forkIds[1]);
 
         // Check if bridge promise can be resolved
-        if (promiseCallbackB.canResolve(bridgeId)) {
-            console.log("Resolving bridge promise on Chain B (expecting failure)");
-            promiseCallbackB.resolve(bridgeId);
-            console.log("Bridge promise resolved - relaySwap executed but should have failed");
-        } else {
-            console.log("Bridge promise not ready for resolution");
-        }
+        require(promiseCallbackB.canResolve(bridgeId), "Bridge promise not ready for resolution");
+        promiseCallbackB.resolve(bridgeId);
 
         // Check the status of the bridge promise (should be rejected)
         PromiseCallback.Promise memory bridgePromise = promiseCallbackB.getPromise(bridgeId);
@@ -395,61 +335,41 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         console.log("");
 
         // ========================================
-        // PHASE 4: CHAIN B - RESOLVE ERROR HANDLER PROMISE
+        // STEP 3: CHAIN B - RESOLVE ERROR HANDLER PROMISE
         // ========================================
-        console.log("PHASE 4: CHAIN B - RESOLVE ERROR HANDLER PROMISE");
+        console.log("STEP 3: CHAIN B - RESOLVE ERROR HANDLER PROMISE");
 
         // Check if error handler promise can be resolved
-        if (promiseCallbackB.canResolve(bridgeBackOnErrorId)) {
-            console.log("Resolving error handler promise on Chain B");
-            promiseCallbackB.resolve(bridgeBackOnErrorId);
-            console.log("Error handler promise resolved - bridgeBackOnError executed");
-        } else {
-            console.log("Error handler promise not ready for resolution");
-        }
+        require(promiseCallbackB.canResolve(bridgeBackOnErrorId), "Error handler promise not ready for resolution");
+        promiseCallbackB.resolve(bridgeBackOnErrorId);
 
         // Check the status of the error handler promise
         PromiseCallback.Promise memory errorPromise = promiseCallbackB.getPromise(bridgeBackOnErrorId);
         console.log("Error handler promise status:", uint256(errorPromise.status));
         console.log("");
 
-        // ========================================
-        // PHASE 5: RELAY FINAL MESSAGES
-        // ========================================
-        console.log("PHASE 5: RELAY FINAL MESSAGES");
-        console.log("Relaying cross-chain messages from Chain B to Chain A");
-
         relayAllMessages();
-        console.log("Final messages relayed successfully");
-
-        // Process the bridge message on Chain A to mint refund tokens
-        vm.selectFork(forkIds[0]);
-        console.log("Processing bridge message on Chain A");
-        relayAllMessages();
-        console.log("");
 
         // ========================================
-        // PHASE 6: VERIFICATION
+        // STEP 4: VERIFICATION
         // ========================================
-        console.log("PHASE 6: VERIFICATION");
+        console.log("STEP 4: VERIFICATION");
 
         // Verify final balances on Chain A (should be refunded)
         vm.selectFork(forkIds[0]);
         uint256 finalTokenInBalanceA = tokenIn.balanceOf(user);
         uint256 finalTokenOutBalanceA = tokenOut.balanceOf(user);
 
-        console.log("Chain A - TokenIn balance change:", int256(finalTokenInBalanceA) - int256(initialTokenInBalanceA));
-        console.log(
-            "Chain A - TokenOut balance change:", int256(finalTokenOutBalanceA) - int256(initialTokenOutBalanceA)
-        );
-
         // Verify final balances on Chain B
         vm.selectFork(forkIds[1]);
         uint256 finalTokenInBalanceB = tokenIn.balanceOf(user);
         uint256 finalTokenOutBalanceB = tokenOut.balanceOf(user);
 
-        console.log("Chain B - TokenIn balance:", finalTokenInBalanceB);
-        console.log("Chain B - TokenOut balance:", finalTokenOutBalanceB);
+        // token balance change
+        console.log("Chain A - TokenIn balance change:", int256(finalTokenInBalanceA) - int256(initialTokenInBalanceA));
+        console.log(
+            "Chain A - TokenOut balance change:", int256(finalTokenOutBalanceA) - int256(initialTokenOutBalanceA)
+        );
 
         // Verify refund conditions
         assertEq(
@@ -459,8 +379,6 @@ contract BridgeSwapBridgeTest is Test, Relayer {
         assertEq(finalTokenInBalanceB, 0, "TokenIn on Chain B should be 0");
         assertEq(finalTokenOutBalanceB, 0, "TokenOut on Chain B should be 0");
 
-        console.log("");
         console.log("SUCCESS: Cross-chain swap failure handled correctly with refund!");
-        console.log("Flow: TokenIn (A) -> Bridge -> TokenIn (B) -> Swap (fail) -> TokenIn (B) -> Bridge -> TokenIn (A)");
     }
 }
