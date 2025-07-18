@@ -115,6 +115,11 @@ contract PromiseCallback is IResolvable {
             destinationChain = block.chainid;
         }
 
+        // Use sender as resolver if not specified
+        if (resolver == address(0)) {
+            resolver = msg.sender;
+        }
+
         Promise memory promiseData = Promise({
             resolver: resolver,
             status: PromiseStatus.Pending,
