@@ -115,75 +115,7 @@ contract PromiseCallback is IResolvable {
             destinationChain = block.chainid;
         }
 
-        return _createPromise({
-            promiseId: bytes32(0),
-            resolver: resolver,
-            parentPromiseId: parentPromiseId,
-            dependencyType: dependencyType,
-            target: target,
-            executionData: executionData,
-            creator: msg.sender,
-            sourceChain: block.chainid,
-            validator: validator,
-            validationData: validationData,
-            destinationChain: destinationChain
-        });
-    }
-
-    /// @notice Internal function to create a promise (handles cross-chain)
-    /// @param promiseId The specific ID to use (bytes32(0) to auto-generate)
-    /// @param resolver The address that can resolve this promise
-    /// @param parentPromiseId The parent promise ID (bytes32(0) for none)
-    /// @param dependencyType How this promise relates to its parent
-    /// @param target The contract to call when resolving (address(0) for manual)
-    /// @param executionData Selector (4 bytes) or full calldata (>4 bytes)
-    /// @param creator Who created this promise
-    /// @param sourceChain Origin chain ID
-    /// @param validator Custom validator contract
-    /// @param validationData Data for the validator
-    /// @param destinationChain Chain where promise should be created (0 for current)
-    /// @return promiseId The unique identifier for the new promise
-    function _createPromise(
-        bytes32 promiseId,
-        address resolver,
-        bytes32 parentPromiseId,
-        DependencyType dependencyType,
-        address target,
-        bytes memory executionData,
-        address creator,
-        uint256 sourceChain,
-        IValidator validator,
-        bytes memory validationData,
-        uint256 destinationChain
-    ) internal returns (bytes32) {
-        // Generate ID if not specified
-        uint256 currentNonce = nonce++;
-        promiseId = generateGlobalPromiseId(bytes32(currentNonce));
-
-        // Handle cross-chain creation
-        if (destinationChain != block.chainid) {
-            bytes memory message = abi.encodeCall(
-                this.receivePromiseCreation,
-                (
-                    promiseId,
-                    resolver,
-                    parentPromiseId,
-                    uint8(dependencyType),
-                    target,
-                    executionData,
-                    creator,
-                    address(validator),
-                    validationData
-                )
-            );
-
-            MESSENGER.sendMessage(destinationChain, address(this), message);
-            emit PromiseCreated(promiseId, resolver, creator);
-            return promiseId;
-        }
-
-        // Create locally
-        promises[promiseId] = Promise({
+        Promise memory promiseData = Promise({
             resolver: resolver,
             status: PromiseStatus.Pending,
             returnData: "",
@@ -191,13 +123,34 @@ contract PromiseCallback is IResolvable {
             dependencyType: dependencyType,
             target: target,
             executionData: executionData,
-            creator: creator,
-            sourceChain: sourceChain,
+            creator: msg.sender,
+            sourceChain: block.chainid,
             validator: validator,
             validationData: validationData
         });
 
-        emit PromiseCreated(promiseId, resolver, creator);
+        return _createPromise(promiseData, destinationChain);
+    }
+
+    /// @notice Internal function to create a promise (handles cross-chain)
+    /// @param promiseData The promise data to create
+    /// @param destinationChain Chain where promise should be created (0 for current)
+    /// @return promiseId The unique identifier for the new promise
+    function _createPromise(Promise memory promiseData, uint256 destinationChain) internal returns (bytes32) {
+        // Generate ID if not specified
+        uint256 currentNonce = nonce++;
+        bytes32 promiseId = generateGlobalPromiseId(bytes32(currentNonce));
+
+        // Handle cross-chain creation
+        if (destinationChain != block.chainid) {
+            bytes memory message = abi.encodeCall(this.receivePromiseCreation, (promiseId, promiseData));
+
+            MESSENGER.sendMessage(destinationChain, address(this), message);
+        } else {
+            // Create locally
+            promises[promiseId] = promiseData;
+        }
+        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator);
         return promiseId;
     }
 
@@ -405,46 +358,16 @@ contract PromiseCallback is IResolvable {
 
     /// @notice Receive promise creation from another chain
     /// @param promiseId The promise ID to create
-    /// @param resolver The address that can resolve this promise
-    /// @param parentPromiseId The parent promise ID (bytes32(0) for none)
-    /// @param dependencyType How this promise relates to its parent
-    /// @param target The contract to call when resolving
-    /// @param executionData Selector (4 bytes) or full calldata (>4 bytes)
-    /// @param creator Who created this promise
-    /// @param validator Custom validator contract address
-    /// @param validationData Data for the validator
-    function receivePromiseCreation(
-        bytes32 promiseId,
-        address resolver,
-        bytes32 parentPromiseId,
-        uint8 dependencyType,
-        address target,
-        bytes calldata executionData,
-        address creator,
-        address validator,
-        bytes calldata validationData
-    ) external {
+    /// @param promiseData The promise data to create
+    function receivePromiseCreation(bytes32 promiseId, Promise calldata promiseData) external {
         require(msg.sender == address(MESSENGER), "PromiseCallback: only messenger can call");
         require(
             MESSENGER.crossDomainMessageSender() == address(this), "PromiseCallback: only from PromiseCallback contract"
         );
-        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
 
-        promises[promiseId] = Promise({
-            resolver: resolver,
-            status: PromiseStatus.Pending,
-            returnData: "",
-            parentPromiseId: parentPromiseId,
-            dependencyType: DependencyType(dependencyType),
-            target: target,
-            executionData: executionData,
-            creator: creator,
-            sourceChain: MESSENGER.crossDomainMessageSource(),
-            validator: IValidator(validator),
-            validationData: validationData
-        });
+        promises[promiseId] = promiseData;
 
-        emit PromiseCreated(promiseId, resolver, creator);
+        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator);
     }
 
     /// @notice Share a resolved promise to another chain
@@ -478,7 +401,6 @@ contract PromiseCallback is IResolvable {
         require(
             MESSENGER.crossDomainMessageSender() == address(this), "PromiseCallback: only from PromiseCallback contract"
         );
-        require(promises[promiseId].resolver == address(0), "PromiseCallback: promise already exists");
 
         Promise storage promiseData = promises[promiseId];
 
