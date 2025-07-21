@@ -65,7 +65,9 @@ contract PromiseCallback is IResolvable {
     // =============================================================================
 
     /// @notice Event emitted when a new promise is created
-    event PromiseCreated(bytes32 indexed promiseId, address indexed resolver, address indexed creator);
+    event PromiseCreated(
+        bytes32 indexed promiseId, address indexed resolver, address indexed creator, uint256 destinationChain
+    );
 
     /// @notice Event emitted when a promise is resolved
     event PromiseResolved(bytes32 indexed promiseId, bytes returnData);
@@ -155,7 +157,7 @@ contract PromiseCallback is IResolvable {
             // Create locally
             promises[promiseId] = promiseData;
         }
-        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator);
+        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator, destinationChain);
         return promiseId;
     }
 
@@ -372,7 +374,7 @@ contract PromiseCallback is IResolvable {
 
         promises[promiseId] = promiseData;
 
-        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator);
+        emit PromiseCreated(promiseId, promiseData.resolver, promiseData.creator, block.chainid);
     }
 
     /// @notice Share a resolved promise to another chain
